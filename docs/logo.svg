@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- 背景渐变 -->
+    <radialGradient id="bg-grad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#161b22"/>
+      <stop offset="100%" stop-color="#0d1117"/>
+    </radialGradient>
+
+    <!-- 外环轨道渐变 -->
+    <linearGradient id="track-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#58a6ff" stop-opacity="0.6"/>
+      <stop offset="50%" stop-color="#a371f7" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#cc785c" stop-opacity="0.6"/>
+    </linearGradient>
+
+    <!-- 节点发光 -->
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- 中心 Claude 菱形渐变 -->
+    <linearGradient id="claude-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f4a261"/>
+      <stop offset="100%" stop-color="#cc785c"/>
+    </linearGradient>
+
+    <!-- 节点颜色 -->
+    <linearGradient id="node-blue" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#58a6ff"/>
+      <stop offset="100%" stop-color="#1f6feb"/>
+    </linearGradient>
+    <linearGradient id="node-cyan" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#56d4dd"/>
+      <stop offset="100%" stop-color="#22a6b3"/>
+    </linearGradient>
+    <linearGradient id="node-green" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#56d364"/>
+      <stop offset="100%" stop-color="#238636"/>
+    </linearGradient>
+    <linearGradient id="node-purple" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#d2a8ff"/>
+      <stop offset="100%" stop-color="#8957e5"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 背景圆 -->
+  <circle cx="256" cy="256" r="240" fill="url(#bg-grad)" stroke="#21262d" stroke-width="2"/>
+
+  <!-- 外环轨道虚线 -->
+  <circle cx="256" cy="256" r="170" fill="none" stroke="url(#track-grad)" stroke-width="2" stroke-dasharray="12 8" opacity="0.8"/>
+  <circle cx="256" cy="256" r="158" fill="none" stroke="url(#track-grad)" stroke-width="1" stroke-dasharray="4 6" opacity="0.4"/>
+
+  <!-- 连接线：从中心到各节点 -->
+  <g opacity="0.3" stroke-width="1.5">
+    <line x1="256" y1="256" x2="256" y2="86" stroke="#58a6ff"/>
+    <line x1="256" y1="256" x2="406" y2="186" stroke="#56d4dd"/>
+    <line x1="256" y1="256" x2="406" y2="326" stroke="#56d364"/>
+    <line x1="256" y1="256" x2="106" y2="326" stroke="#d2a8ff"/>
+    <line x1="256" y1="256" x2="106" y2="186" stroke="#cc785c"/>
+  </g>
+
+  <!-- 模型节点（围绕中心） -->
+  <!-- 顶部：DeepSeek 蓝 -->
+  <g transform="translate(256, 86)" filter="url(#glow)">
+    <circle r="22" fill="#0d1117" stroke="url(#node-blue)" stroke-width="3"/>
+    <text y="1" text-anchor="middle" dominant-baseline="middle" fill="#58a6ff" font-family="Segoe UI, system-ui, sans-serif" font-size="11" font-weight="700">DS</text>
+  </g>
+
+  <!-- 右上：Qwen 青 -->
+  <g transform="translate(406, 186)" filter="url(#glow)">
+    <circle r="22" fill="#0d1117" stroke="url(#node-cyan)" stroke-width="3"/>
+    <text y="1" text-anchor="middle" dominant-baseline="middle" fill="#56d4dd" font-family="Segoe UI, system-ui, sans-serif" font-size="11" font-weight="700">Qw</text>
+  </g>
+
+  <!-- 右下：OpenAI 绿 -->
+  <g transform="translate(406, 326)" filter="url(#glow)">
+    <circle r="22" fill="#0d1117" stroke="url(#node-green)" stroke-width="3"/>
+    <text y="1" text-anchor="middle" dominant-baseline="middle" fill="#56d364" font-family="Segoe UI, system-ui, sans-serif" font-size="11" font-weight="700">OAI</text>
+  </g>
+
+  <!-- 左下：更多模型 紫 -->
+  <g transform="translate(106, 326)" filter="url(#glow)">
+    <circle r="22" fill="#0d1117" stroke="url(#node-purple)" stroke-width="3"/>
+    <text y="1" text-anchor="middle" dominant-baseline="middle" fill="#d2a8ff" font-family="Segoe UI, system-ui, sans-serif" font-size="13" font-weight="700">+</text>
+  </g>
+
+  <!-- 左上：Claude 橙 -->
+  <g transform="translate(106, 186)" filter="url(#glow)">
+    <circle r="22" fill="#0d1117" stroke="#cc785c" stroke-width="3"/>
+    <text y="1" text-anchor="middle" dominant-baseline="middle" fill="#cc785c" font-family="Segoe UI, system-ui, sans-serif" font-size="11" font-weight="700">Cl</text>
+  </g>
+
+  <!-- 中心 Claude 菱形（核心标识） -->
+  <g transform="translate(256, 256)" filter="url(#glow)">
+    <!-- 外层光晕 -->
+    <polygon points="0,-58 58,0 0,58 -58,0" fill="#cc785c" opacity="0.15"/>
+    <polygon points="0,-52 52,0 0,52 -52,0" fill="#cc785c" opacity="0.2"/>
+    <!-- 主体菱形 -->
+    <polygon points="0,-46 46,0 0,46 -46,0" fill="url(#claude-grad)"/>
+    <!-- 内部高光 -->
+    <polygon points="0,-38 38,0 0,10 -38,0" fill="#ffffff" opacity="0.15"/>
+    <!-- 中心小菱形镂空 -->
+    <polygon points="0,-14 14,0 0,14 -14,0" fill="#0d1117"/>
+    <polygon points="0,-10 10,0 0,10 -10,0" fill="#f4a261" opacity="0.6"/>
+  </g>
+
+  <!-- 旋转指示箭头（轨道上的小圆点） -->
+  <g opacity="0.9">
+    <circle cx="256" cy="66" r="4" fill="#58a6ff" filter="url(#glow)"/>
+    <circle cx="426" cy="256" r="4" fill="#56d364" filter="url(#glow)"/>
+    <circle cx="256" cy="446" r="4" fill="#d2a8ff" filter="url(#glow)" opacity="0.3"/>
+  </g>
+
+  <!-- 底部项目名称（可选，适合社交媒体卡片） -->
+  <text x="256" y="470" text-anchor="middle" fill="#8b949e" font-family="Segoe UI, system-ui, sans-serif" font-size="11" font-weight="500" letter-spacing="2">MODEL SWITCHER</text>
+</svg>

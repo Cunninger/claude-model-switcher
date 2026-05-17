@@ -1,0 +1,156 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640">
+  <defs>
+    <!-- 背景渐变 -->
+    <radialGradient id="bg" cx="50%" cy="50%" r="70%">
+      <stop offset="0%" stop-color="#161b22"/>
+      <stop offset="100%" stop-color="#0d1117"/>
+    </radialGradient>
+
+    <!-- 网格背景 -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#21262d" stroke-width="1"/>
+    </pattern>
+
+    <!-- 轨道渐变 -->
+    <linearGradient id="track" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#58a6ff" stop-opacity="0.3"/>
+      <stop offset="50%" stop-color="#a371f7" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#cc785c" stop-opacity="0.3"/>
+    </linearGradient>
+
+    <!-- 发光滤镜 -->
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Claude 菱形渐变 -->
+    <linearGradient id="claude" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f4a261"/>
+      <stop offset="100%" stop-color="#cc785c"/>
+    </linearGradient>
+
+    <!-- 节点渐变 -->
+    <linearGradient id="n-blue" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#58a6ff"/>
+      <stop offset="100%" stop-color="#1f6feb"/>
+    </linearGradient>
+    <linearGradient id="n-cyan" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#56d4dd"/>
+      <stop offset="100%" stop-color="#22a6b3"/>
+    </linearGradient>
+    <linearGradient id="n-green" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#56d364"/>
+      <stop offset="100%" stop-color="#238636"/>
+    </linearGradient>
+    <linearGradient id="n-purple" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#d2a8ff"/>
+      <stop offset="100%" stop-color="#8957e5"/>
+    </linearGradient>
+
+    <!-- 文字发光 -->
+    <filter id="text-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- 背景 -->
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#grid)" opacity="0.5"/>
+
+  <!-- 左侧装饰：多个同心圆环 -->
+  <circle cx="320" cy="320" r="260" fill="none" stroke="#21262d" stroke-width="2"/>
+  <circle cx="320" cy="320" r="200" fill="none" stroke="url(#track)" stroke-width="3" stroke-dasharray="16 12" opacity="0.8"/>
+  <circle cx="320" cy="320" r="184" fill="none" stroke="#21262d" stroke-width="1"/>
+
+  <!-- 连接线 -->
+  <g opacity="0.25" stroke-width="2">
+    <line x1="320" y1="320" x2="320" y2="60" stroke="#58a6ff"/>
+    <line x1="320" y1="320" x2="546" y2="189" stroke="#56d4dd"/>
+    <line x1="320" y1="320" x2="546" y2="451" stroke="#56d364"/>
+    <line x1="320" y1="320" x2="94" y2="451" stroke="#d2a8ff"/>
+    <line x1="320" y1="320" x2="94" y2="189" stroke="#cc785c"/>
+  </g>
+
+  <!-- 模型节点 -->
+  <g filter="url(#glow)">
+    <!-- 顶部 DeepSeek -->
+    <g transform="translate(320, 60)">
+      <circle r="32" fill="#0d1117" stroke="url(#n-blue)" stroke-width="4"/>
+      <text y="2" text-anchor="middle" dominant-baseline="middle" fill="#58a6ff" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="16" font-weight="800">DS</text>
+    </g>
+    <!-- 右上 Qwen -->
+    <g transform="translate(546, 189)">
+      <circle r="32" fill="#0d1117" stroke="url(#n-cyan)" stroke-width="4"/>
+      <text y="2" text-anchor="middle" dominant-baseline="middle" fill="#56d4dd" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="16" font-weight="800">Qw</text>
+    </g>
+    <!-- 右下 OpenAI -->
+    <g transform="translate(546, 451)">
+      <circle r="32" fill="#0d1117" stroke="url(#n-green)" stroke-width="4"/>
+      <text y="2" text-anchor="middle" dominant-baseline="middle" fill="#56d364" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="14" font-weight="800">OAI</text>
+    </g>
+    <!-- 左下 更多 -->
+    <g transform="translate(94, 451)">
+      <circle r="32" fill="#0d1117" stroke="url(#n-purple)" stroke-width="4"/>
+      <text y="2" text-anchor="middle" dominant-baseline="middle" fill="#d2a8ff" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="20" font-weight="800">+</text>
+    </g>
+    <!-- 左上 Claude -->
+    <g transform="translate(94, 189)">
+      <circle r="32" fill="#0d1117" stroke="#cc785c" stroke-width="4"/>
+      <text y="2" text-anchor="middle" dominant-baseline="middle" fill="#cc785c" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="16" font-weight="800">Cl</text>
+    </g>
+  </g>
+
+  <!-- 中心 Claude 菱形 -->
+  <g transform="translate(320, 320)" filter="url(#glow)">
+    <polygon points="0,-82 82,0 0,82 -82,0" fill="#cc785c" opacity="0.12"/>
+    <polygon points="0,-72 72,0 0,72 -72,0" fill="#cc785c" opacity="0.18"/>
+    <polygon points="0,-64 64,0 0,64 -64,0" fill="url(#claude)"/>
+    <polygon points="0,-52 52,0 0,14 -52,0" fill="#ffffff" opacity="0.18"/>
+    <polygon points="0,-20 20,0 0,20 -20,0" fill="#0d1117"/>
+    <polygon points="0,-14 14,0 0,14 -14,0" fill="#f4a261" opacity="0.5"/>
+  </g>
+
+  <!-- 轨道装饰点 -->
+  <g filter="url(#glow)">
+    <circle cx="320" cy="40" r="6" fill="#58a6ff"/>
+    <circle cx="576" cy="256" r="6" fill="#56d364"/>
+    <circle cx="64" cy="256" r="6" fill="#cc785c"/>
+  </g>
+
+  <!-- 右侧文字区域 -->
+  <g transform="translate(720, 220)">
+    <!-- 主标题 -->
+    <text x="0" y="0" fill="#f0f6fc" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="52" font-weight="800" letter-spacing="-1">Claude Code</text>
+    <text x="0" y="64" fill="#f0f6fc" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="52" font-weight="800" letter-spacing="-1">Model Switcher</text>
+
+    <!-- 副标题 -->
+    <text x="0" y="120" fill="#8b949e" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="22" font-weight="400">Switch AI models seamlessly.</text>
+    <text x="0" y="152" fill="#8b949e" font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="22" font-weight="400">Share history. One command.</text>
+
+    <!-- 装饰线 -->
+    <rect x="0" y="190" width="80" height="4" rx="2" fill="#cc785c"/>
+
+    <!-- 技术标签 -->
+    <g transform="translate(0, 230)">
+      <rect x="0" y="0" width="140" height="36" rx="6" fill="#21262d" stroke="#30363d" stroke-width="1"/>
+      <text x="70" y="24" text-anchor="middle" fill="#58a6ff" font-family="Segoe UI, system-ui, sans-serif" font-size="14" font-weight="600">PowerShell 7+</text>
+
+      <rect x="156" y="0" width="100" height="36" rx="6" fill="#21262d" stroke="#30363d" stroke-width="1"/>
+      <text x="206" y="24" text-anchor="middle" fill="#cc785c" font-family="Segoe UI, system-ui, sans-serif" font-size="14" font-weight="600">Windows</text>
+
+      <rect x="272" y="0" width="80" height="36" rx="6" fill="#21262d" stroke="#30363d" stroke-width="1"/>
+      <text x="312" y="24" text-anchor="middle" fill="#56d364" font-family="Segoe UI, system-ui, sans-serif" font-size="14" font-weight="600">GPL-3.0</text>
+    </g>
+  </g>
+
+  <!-- 右下角装饰：小字 -->
+  <text x="1240" y="620" text-anchor="end" fill="#484f58" font-family="Segoe UI, system-ui, sans-serif" font-size="12" font-weight="500" letter-spacing="1">github.com/cunninger/claude-model-switcher</text>
+</svg>

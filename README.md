@@ -1,39 +1,56 @@
-# Claude Code 多模型切换器 / Claude Code Multi-Model Switcher
+<div align="center">
 
-[中文](#中文) | [English](#english)
+<img src="docs/banner.svg" alt="Claude Code Multi-Model Switcher Banner" width="100%" />
+
+<p>
+  <strong>PowerShell 脚本</strong> · 让 Claude Code CLI 在 OpenAI / DeepSeek / Qwen 等多模型间一键切换，同时共享对话历史与自定义命令
+</p>
+
+<p>
+  <a href="https://github.com/cunninger/claude-model-switcher/stargazers"><img src="https://img.shields.io/github/stars/cunninger/claude-model-switcher?style=flat-square&logo=github&color=yellow" alt="Stars"></a>
+  <a href="https://github.com/cunninger/claude-model-switcher/blob/master/LICENSE"><img src="https://img.shields.io/github/license/cunninger/claude-model-switcher?style=flat-square&color=blue" alt="License"></a>
+  <a href="https://github.com/PowerShell/PowerShell"><img src="https://img.shields.io/badge/PowerShell-7%2B-5391FE?style=flat-square&logo=powershell" alt="PowerShell 7+"></a>
+  <a href="https://docs.anthropic.com/en/docs/claude-code"><img src="https://img.shields.io/badge/Claude%20Code-CLI-CC785C?style=flat-square&logo=anthropic" alt="Claude Code"></a>
+  <a href="https://github.com/cunninger/claude-model-switcher/issues"><img src="https://img.shields.io/github/issues/cunninger/claude-model-switcher?style=flat-square&color=red" alt="Issues"></a>
+</p>
+
+<p>
+  <a href="#快速开始">快速开始</a> •
+  <a href="#功能特性">功能特性</a> •
+  <a href="#架构原理">架构原理</a> •
+  <a href="#命令列表">命令列表</a> •
+  <a href="#english">English</a>
+</p>
+
+<!-- 演示 GIF 占位 -->
+<!-- 建议：录制 10-15s 的asciinema或ScreenToGif，展示 deepseek → qwen → gpt4o 的切换过程 -->
+<!-- <img src="docs/demo.gif" alt="Demo" width="80%" /> -->
+
+</div>
 
 ---
 
-<a id="中文"></a>
+## 目录
 
-## 简介
+- [快速开始](#快速开始)
+- [功能特性](#功能特性)
+- [前置依赖](#前置依赖)
+- [安装](#安装)
+- [使用指南](#使用指南)
+- [架构原理](#架构原理)
+- [命令列表](#命令列表)
+- [配置说明](#配置说明)
+- [常见问题](#常见问题)
+- [配套文档](#配套文档)
+- [贡献指南](#贡献指南)
+- [许可证](#许可证)
 
-一个 PowerShell 脚本，让 Claude Code CLI 在多个 AI 模型（OpenAI、DeepSeek、Qwen 等）之间一键切换，同时共享对话历史和自定义命令。
-
-## 功能特性
-
-- **一键切换** — 输入模型名或快捷别名即可启动对应模型的 Claude Code
-- **对话历史共享** — 所有模型的对话存储在统一目录，跨模型可 resume
-- **配置自动合并** — 基础配置 + 模型特定配置自动合并，无需手动维护多份 settings.json
-- **交互式添加模型** — `Add-ClaudeModel` 向导引导完成全部配置
-- **跨模型 Resume 安全** — 自动修复未完成的 tool call，避免切换模型后 400 错误
-- **Windows Toast 通知** — 任务完成时弹出通知 + 音效提醒
-- **动态注册** — 添加/删除模型后立即生效，无需重新加载脚本
-
-## 前置依赖
-
-| 依赖 | 必要性 | 安装方式 |
-|---|---|---|
-| [PowerShell 7+](https://github.com/PowerShell/PowerShell) | 必须 | `winget install Microsoft.PowerShell` |
-| [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) | 必须 | `npm install -g @anthropic-ai/claude-code` |
-| [BurntToast](https://github.com/Windos/BurntToast) | 可选（通知功能） | `Install-Module -Name BurntToast -Scope CurrentUser` |
-
-> 仅支持 Windows（使用 Junction/SymbolicLink、Toast 通知等 Windows 特性）。
+---
 
 ## 快速开始
 
 ```powershell
-# 1. Clone 仓库
+# 1. 克隆仓库
 git clone https://github.com/cunninger/claude-model-switcher.git
 cd claude-model-switcher
 
@@ -44,32 +61,179 @@ cd claude-model-switcher
 Add-ClaudeModel
 
 # 4. 启动！
-# 假设你添加了模型标识 "deepseek"，别名 "d"
-deepseek          # 或直接输入别名
-d                 # 快捷方式
+deepseek    # 输入模型标识
+d           # 或快捷别名
 ```
 
-## 持久化加载
+<details>
+<summary>💡 持久化加载（推荐）</summary>
 
-将以下内容添加到 PowerShell Profile 中，每次打开终端自动加载：
+将以下行添加到 PowerShell Profile，每次启动终端自动加载：
 
 ```powershell
-# 在 $PROFILE 中添加
+# $PROFILE
 . "D:\你的路径\claude-model-switcher.ps1"
 ```
 
+</details>
+
+---
+
+## 功能特性
+
+| 特性 | 说明 |
+|------|------|
+| ⚡ **一键切换** | 输入模型名或别名即可启动对应模型的 Claude Code |
+| 🔄 **对话历史共享** | 所有模型的对话存储在统一目录，跨模型可无缝 `resume` |
+| ⚙️ **配置自动合并** | 基础配置 + 模型特定配置自动合并，无需维护多份 `settings.json` |
+| 🧙 **交互式添加模型** | `Add-ClaudeModel` 向导引导完成全部配置 |
+| 🛡️ **跨模型 Resume 安全** | 自动修复未完成的 tool call，避免切换模型后 400 错误 |
+| 🔔 **Windows Toast 通知** | 任务完成时弹出通知 + 音效提醒 |
+| 📝 **动态注册** | 添加/删除模型后立即生效，无需重新加载脚本 |
+
+---
+
+## 前置依赖
+
+| 依赖 | 版本 | 必要性 | 安装方式 |
+|------|------|--------|----------|
+| [PowerShell](https://github.com/PowerShell/PowerShell) | 7+ | 必须 | `winget install Microsoft.PowerShell` |
+| [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) | 最新 | 必须 | `npm install -g @anthropic-ai/claude-code` |
+| [BurntToast](https://github.com/Windos/BurntToast) | 最新 | 可选（通知功能） | `Install-Module -Name BurntToast -Scope CurrentUser` |
+
+> **平台限制**：仅支持 Windows。脚本使用 Junction/SymbolicLink、Toast 通知等 Windows 特性。
+
+---
+
+## 安装
+
+### 方式一：直接克隆（推荐）
+
+```powershell
+git clone https://github.com/cunninger/claude-model-switcher.git
+cd claude-model-switcher
+. ./claude-model-switcher.ps1
+```
+
+### 方式二：作为 PowerShell 模块
+
+<!-- TODO: 未来可发布到 PSGallery，届时添加 Install-Module 方式 -->
+
+---
+
+## 使用指南
+
+### 添加模型
+
+```powershell
+Add-ClaudeModel
+```
+
+跟随交互式向导输入：
+1. 模型标识（如 `deepseek`、`qwen`、`gpt4o`）
+2. 快捷别名（如 `d`、`q`、`g`）
+3. API Base URL
+4. API Key
+5. 模型名称
+
+### 切换模型
+
+```powershell
+# 使用模型标识
+deepseek
+
+# 使用别名
+d
+
+# 这些命令由脚本动态注册，每次添加新模型后立即可用
+```
+
+### 删除模型
+
+```powershell
+Remove-ClaudeModel
+```
+
+### 修复通知脚本
+
+当脚本更新后，批量修复所有已配置模型的通知脚本：
+
+```powershell
+Repair-ClaudeNotify
+```
+
+---
+
+## 架构原理
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     PowerShell 会话                          │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │              claude-model-switcher.ps1               │   │
+│  │  · 动态注册模型命令 (deepseek, d, qwen, q ...)       │   │
+│  │  · 配置合并引擎                                       │   │
+│  │  · Junction 链接管理                                  │   │
+│  │  · Tool call 修复器                                   │   │
+│  └─────────────────────────────────────────────────────┘   │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+           ┌───────────────┼───────────────┐
+           ▼               ▼               ▼
+    ┌────────────┐  ┌────────────┐  ┌────────────┐
+    │ ~/.claude- │  │ ~/.claude- │  │ ~/.claude- │
+    │ deepseek/  │  │   qwen/    │  │   gpt4o/   │
+    │            │  │            │  │            │
+    │ settings.  │  │ settings.  │  │ settings.  │
+    │ json       │  │ json       │  │ json       │
+    │ (合并生成)  │  │ (合并生成)  │  │ (合并生成)  │
+    │            │  │            │  │            │
+    │ model-     │  │ model-     │  │ model-     │
+    │ specific.  │  │ specific.  │  │ specific.  │
+    │ json       │  │ json       │  │ json       │
+    │ (用户配置)  │  │ (用户配置)  │  │ (用户配置)  │
+    └─────┬──────┘  └─────┬──────┘  └─────┬──────┘
+          │               │               │
+          └───────────────┼───────────────┘
+                          │ Junction / SymbolicLink
+                          ▼
+           ┌──────────────────────────────┐
+           │      ~/.claude-shared/        │
+           │  ┌────────────────────────┐  │
+           │  │    conversations/      │  │  ← 所有模型共享
+           │  │    (对话历史)           │  │
+           │  └────────────────────────┘  │
+           │  ┌────────────────────────┐  │
+           │  │      projects/         │  │  ← 所有模型共享
+           │  └────────────────────────┘  │
+           │         ...                  │
+           └──────────────────────────────┘
+```
+
+**核心设计**：
+
+- **私有目录** (`~/.claude-<model>/`)：每个模型独立的配置、环境变量、通知脚本
+- **共享目录** (`~/.claude-shared/`)：通过 Junction 链接统一存储对话历史、项目、自定义命令和 Skills
+- **配置合并**：启动时自动将 `model-specific.json` 合并到 `settings.json`，无需手动同步
+
+---
+
 ## 命令列表
 
-| 命令 | 说明 |
-|---|---|
-| `Add-ClaudeModel` | 交互式添加新模型 |
-| `Remove-ClaudeModel` | 交互式删除模型 |
-| `Repair-ClaudeNotify` | 批量修复/更新所有模型的通知脚本 |
-| `Set-ClaudeModelSound` | 修改指定模型的通知音效 |
-| `Test-ModelNotify` | 试听通知效果 |
-| `Repair-ClaudeConversation` | 修复对话中未完成的 tool call |
+| 命令 | 说明 | 使用频率 |
+|------|------|----------|
+| `Add-ClaudeModel` | 交互式添加新模型 | ⭐ 常用 |
+| `Remove-ClaudeModel` | 交互式删除模型 | 偶尔 |
+| `Repair-ClaudeNotify` | 批量修复/更新所有模型的通知脚本 | 升级后 |
+| `Set-ClaudeModelSound` | 修改指定模型的通知音效 | 可选 |
+| `Test-ModelNotify` | 试听通知效果 | 调试 |
+| `Repair-ClaudeConversation` | 修复对话中未完成的 tool call | 排错 |
 
-## 配置文件说明
+---
+
+## 配置说明
+
+### 目录结构
 
 ```
 ~/.claude-shared/                    # 共享数据根目录
@@ -100,41 +264,119 @@ d                 # 快捷方式
 }
 ```
 
+---
+
+## 常见问题
+
+<details>
+<summary><b>Q: 切换模型后 resume 出现 400 错误？</b></summary>
+
+脚本已内置 `Repair-ClaudeConversation` 自动修复未完成的 tool call。若仍遇到问题，可手动运行：
+
+```powershell
+Repair-ClaudeConversation
+```
+
+</details>
+
+<details>
+<summary><b>Q: 通知功能不工作？</b></summary>
+
+确保已安装 BurntToast：
+
+```powershell
+Install-Module -Name BurntToast -Scope CurrentUser -Force
+```
+
+然后运行 `Repair-ClaudeNotify` 重新生成通知脚本。
+
+</details>
+
+<details>
+<summary><b>Q: 可以支持 macOS/Linux 吗？</b></summary>
+
+目前依赖 Windows 特有的 Junction 链接和 Toast 通知 API。跨平台支持在 Roadmap 中，欢迎 PR。
+
+</details>
+
+---
+
 ## 配套文档
 
-- [通知配置指南](claude-code-notification-guide.md) — 详细说明 Toast 通知和自定义音效的配置
+| 文档 | 说明 |
+|------|------|
+| [通知配置指南](claude-code-notification-guide.md) | Toast 通知和自定义音效的详细配置 |
 
-## License
+---
 
-[GPL-3.0](LICENSE)
+## 贡献指南
+
+欢迎 Issue 和 PR！
+
+1. Fork 本仓库
+2. 创建特性分支 (`git checkout -b feature/amazing-feature`)
+3. 提交更改 (`git commit -m 'feat: add amazing feature'`)
+4. 推送到分支 (`git push origin feature/amazing-feature`)
+5. 创建 Pull Request
+
+请确保：
+- PowerShell 脚本遵循 [PoshCode 风格指南](https://github.com/PoshCode/PowerShellPracticeAndStyle)
+- 提交信息遵循 [Conventional Commits](https://www.conventionalcommits.org/)
+
+---
+
+## Star 趋势
+
+<!-- 建议安装 https://github.com/star-history/star-history 后替换为真实图表 -->
+<!-- [![Star History Chart](https://api.star-history.com/svg?repos=cunninger/claude-model-switcher&type=Date)](https://star-history.com/#cunninger/claude-model-switcher&Date) -->
+
+如果这个项目对你有帮助，请考虑给个 ⭐ Star！
+
+---
+
+## 许可证
+
+[GPL-3.0](LICENSE) © [cunninger](https://github.com/cunninger)
+
+---
+
+<div align="center">
+
+<p><a href="#english">English Version Below ↓</a></p>
+
+</div>
 
 ---
 
 <a id="english"></a>
 
-## Overview
+<div align="center">
 
-A PowerShell script that lets the Claude Code CLI switch between multiple AI models (OpenAI, DeepSeek, Qwen, etc.) with a single command, while sharing conversation history and custom commands across all models.
+<img src="docs/banner.svg" alt="Claude Code Multi-Model Switcher Banner" width="100%" />
 
-## Features
+<p>
+  <strong>PowerShell script</strong> that enables Claude Code CLI to switch between multiple AI models (OpenAI, DeepSeek, Qwen, etc.) with a single command, while sharing conversation history and custom commands across all models.
+</p>
 
-- **One-command switching** — Launch Claude Code with a specific model by typing its name or alias
-- **Shared conversation history** — All models share a single conversation store; resume works across models
-- **Auto-merged config** — Base settings + model-specific settings are merged automatically
-- **Interactive model wizard** — `Add-ClaudeModel` walks you through the full setup
-- **Safe cross-model resume** — Automatically repairs incomplete tool calls to prevent API 400 errors
-- **Windows Toast notifications** — Desktop notification + sound when Claude finishes
-- **Dynamic registration** — Added/removed models take effect immediately
+<p>
+  <a href="https://github.com/cunninger/claude-model-switcher/stargazers"><img src="https://img.shields.io/github/stars/cunninger/claude-model-switcher?style=flat-square&logo=github&color=yellow" alt="Stars"></a>
+  <a href="https://github.com/cunninger/claude-model-switcher/blob/master/LICENSE"><img src="https://img.shields.io/github/license/cunninger/claude-model-switcher?style=flat-square&color=blue" alt="License"></a>
+  <a href="https://github.com/PowerShell/PowerShell"><img src="https://img.shields.io/badge/PowerShell-7%2B-5391FE?style=flat-square&logo=powershell" alt="PowerShell 7+"></a>
+  <a href="https://docs.anthropic.com/en/docs/claude-code"><img src="https://img.shields.io/badge/Claude%20Code-CLI-CC785C?style=flat-square&logo=anthropic" alt="Claude Code"></a>
+  <a href="https://github.com/cunninger/claude-model-switcher/issues"><img src="https://img.shields.io/github/issues/cunninger/claude-model-switcher?style=flat-square&color=red" alt="Issues"></a>
+</p>
 
-## Prerequisites
+<p>
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#features">Features</a> •
+  <a href="#architecture">Architecture</a> •
+  <a href="#commands">Commands</a> •
+  <a href="#中文">中文</a>
+</p>
 
-| Dependency | Required | Installation |
-|---|---|---|
-| [PowerShell 7+](https://github.com/PowerShell/PowerShell) | Yes | `winget install Microsoft.PowerShell` |
-| [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) | Yes | `npm install -g @anthropic-ai/claude-code` |
-| [BurntToast](https://github.com/Windos/BurntToast) | Optional (notifications) | `Install-Module -Name BurntToast -Scope CurrentUser` |
+</div>
 
-> Windows only — uses Junctions/SymbolicLinks, Toast notifications, and other Windows-specific features.
+---
 
 ## Quick Start
 
@@ -150,30 +392,277 @@ cd claude-model-switcher
 Add-ClaudeModel
 
 # 4. Launch!
-# If you added a model with key "deepseek" and alias "d":
-deepseek          # or just type the alias
-d                 # shortcut
+deepseek    # model identifier
+d           # or alias
 ```
 
-## Persist Across Sessions
+<details>
+<summary>💡 Persist Across Sessions (Recommended)</summary>
 
 Add to your PowerShell `$PROFILE` for auto-loading:
 
 ```powershell
+# $PROFILE
 . "C:\path\to\claude-model-switcher.ps1"
 ```
 
+</details>
+
+---
+
+## Features
+
+| Feature | Description |
+|---------|-------------|
+| ⚡ **One-command switching** | Launch Claude Code with a specific model by typing its name or alias |
+| 🔄 **Shared conversation history** | All models share a single conversation store; resume works across models |
+| ⚙️ **Auto-merged config** | Base settings + model-specific settings are merged automatically |
+| 🧙 **Interactive model wizard** | `Add-ClaudeModel` walks you through the full setup |
+| 🛡️ **Safe cross-model resume** | Automatically repairs incomplete tool calls to prevent API 400 errors |
+| 🔔 **Windows Toast notifications** | Desktop notification + sound when Claude finishes |
+| 📝 **Dynamic registration** | Added/removed models take effect immediately |
+
+---
+
+## Prerequisites
+
+| Dependency | Version | Required | Installation |
+|------------|---------|----------|--------------|
+| [PowerShell](https://github.com/PowerShell/PowerShell) | 7+ | Yes | `winget install Microsoft.PowerShell` |
+| [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) | Latest | Yes | `npm install -g @anthropic-ai/claude-code` |
+| [BurntToast](https://github.com/Windos/BurntToast) | Latest | Optional (notifications) | `Install-Module -Name BurntToast -Scope CurrentUser` |
+
+> **Platform**: Windows only — uses Junctions, SymbolicLinks, Toast notifications, and other Windows-specific features.
+
+---
+
+## Installation
+
+### Option 1: Clone (Recommended)
+
+```powershell
+git clone https://github.com/cunninger/claude-model-switcher.git
+cd claude-model-switcher
+. ./claude-model-switcher.ps1
+```
+
+### Option 2: PowerShell Module (Future)
+
+<!-- TODO: Publish to PSGallery -->
+
+---
+
+## Usage
+
+### Add a Model
+
+```powershell
+Add-ClaudeModel
+```
+
+Follow the interactive wizard to enter:
+1. Model identifier (e.g. `deepseek`, `qwen`, `gpt4o`)
+2. Shortcut alias (e.g. `d`, `q`, `g`)
+3. API Base URL
+4. API Key
+5. Model name
+
+### Switch Models
+
+```powershell
+# Use model identifier
+deepseek
+
+# Use alias
+d
+
+# Commands are dynamically registered and available immediately
+```
+
+### Remove a Model
+
+```powershell
+Remove-ClaudeModel
+```
+
+### Repair Notification Scripts
+
+After updating the script, batch-repair notification scripts for all configured models:
+
+```powershell
+Repair-ClaudeNotify
+```
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     PowerShell Session                       │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │              claude-model-switcher.ps1               │   │
+│  │  · Dynamic model command registration               │   │
+│  │  · Config merge engine                              │   │
+│  │  · Junction link management                         │   │
+│  │  · Tool call repairer                               │   │
+│  └─────────────────────────────────────────────────────┘   │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+           ┌───────────────┼───────────────┐
+           ▼               ▼               ▼
+    ┌────────────┐  ┌────────────┐  ┌────────────┐
+    │ ~/.claude- │  │ ~/.claude- │  │ ~/.claude- │
+    │ deepseek/  │  │   qwen/    │  │   gpt4o/   │
+    │            │  │            │  │            │
+    │ settings.  │  │ settings.  │  │ settings.  │
+    │ json       │  │ json       │  │ json       │
+    │ (merged)   │  │ (merged)   │  │ (merged)   │
+    │            │  │            │  │            │
+    │ model-     │  │ model-     │  │ model-     │
+    │ specific.  │  │ specific.  │  │ specific.  │
+    │ json       │  │ json       │  │ json       │
+    │ (user)     │  │ (user)     │  │ (user)     │
+    └─────┬──────┘  └─────┬──────┘  └─────┬──────┘
+          │               │               │
+          └───────────────┼───────────────┘
+                          │ Junction / SymbolicLink
+                          ▼
+           ┌──────────────────────────────┐
+           │      ~/.claude-shared/        │
+           │  ┌────────────────────────┐  │
+           │  │    conversations/      │  │  ← shared across models
+           │  └────────────────────────┘  │
+           │  ┌────────────────────────┐  │
+           │  │      projects/         │  │  ← shared across models
+           │  └────────────────────────┘  │
+           │         ...                  │
+           └──────────────────────────────┘
+```
+
+**Design Principles**:
+
+- **Private directories** (`~/.claude-<model>/`): Per-model configs, env vars, notification scripts
+- **Shared directory** (`~/.claude-shared/`): Unified conversation history, projects, custom commands, and skills via Junction links
+- **Config merging**: Automatically merges `model-specific.json` into `settings.json` on launch
+
+---
+
 ## Commands
 
-| Command | Description |
-|---|---|
-| `Add-ClaudeModel` | Add a new model (interactive wizard) |
-| `Remove-ClaudeModel` | Remove a model (interactive, with confirmation) |
-| `Repair-ClaudeNotify` | Batch repair/update notification scripts for all models |
-| `Set-ClaudeModelSound` | Change notification sound for a specific model |
-| `Test-ModelNotify` | Preview notification effect |
-| `Repair-ClaudeConversation` | Fix incomplete tool calls in conversation history |
+| Command | Description | Frequency |
+|---------|-------------|-----------|
+| `Add-ClaudeModel` | Add a new model (interactive wizard) | ⭐ Daily |
+| `Remove-ClaudeModel` | Remove a model (interactive, with confirmation) | Occasional |
+| `Repair-ClaudeNotify` | Batch repair/update notification scripts for all models | After upgrade |
+| `Set-ClaudeModelSound` | Change notification sound for a specific model | Optional |
+| `Test-ModelNotify` | Preview notification effect | Debugging |
+| `Repair-ClaudeConversation` | Fix incomplete tool calls in conversation history | Troubleshooting |
+
+---
+
+## Configuration
+
+### Directory Structure
+
+```
+~/.claude-shared/                    # Shared data root
+├── conversations/                   # Shared conversations (Junction)
+├── projects/                        # Shared projects (Junction)
+└── models-registry.json             # Model registry
+
+~/.claude-<model>/                   # Per-model private directory
+├── settings.json                    # Auto-generated, do not edit manually
+├── model-specific.json              # Model-specific config (API URL, Key, Hooks)
+├── notify.ps1                       # Notification script (auto-generated)
+├── conversations/ → ~/.claude-shared/conversations/  # Junction
+├── projects/       → ~/.claude-shared/projects/       # Junction
+├── commands/       → ~/.claude/commands/               # Junction
+└── skills/         → ~/.claude/skills/                 # Junction
+```
+
+### model-specific.json Example
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://api.deepseek.com",
+    "ANTHROPIC_AUTH_TOKEN": "sk-xxx",
+    "ANTHROPIC_MODEL": "deepseek-chat"
+  },
+  "hooks": {}
+}
+```
+
+---
+
+## FAQ
+
+<details>
+<summary><b>Q: 400 error when resuming after switching models?</b></summary>
+
+The script includes `Repair-ClaudeConversation` to auto-fix incomplete tool calls. If issues persist, run manually:
+
+```powershell
+Repair-ClaudeConversation
+```
+
+</details>
+
+<details>
+<summary><b>Q: Notifications not working?</b></summary>
+
+Ensure BurntToast is installed:
+
+```powershell
+Install-Module -Name BurntToast -Scope CurrentUser -Force
+```
+
+Then run `Repair-ClaudeNotify` to regenerate notification scripts.
+
+</details>
+
+<details>
+<summary><b>Q: macOS/Linux support?</b></summary>
+
+Currently relies on Windows-specific Junction links and Toast notification APIs. Cross-platform support is on the roadmap — PRs welcome.
+
+</details>
+
+---
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Notification Guide](claude-code-notification-guide.md) | Detailed Toast notification and custom sound configuration |
+
+---
+
+## Contributing
+
+Issues and PRs are welcome!
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit changes (`git commit -m 'feat: add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+Guidelines:
+- Follow the [PoshCode Style Guide](https://github.com/PoshCode/PowerShellPracticeAndStyle)
+- Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages
+
+---
+
+## Star History
+
+<!-- [![Star History Chart](https://api.star-history.com/svg?repos=cunninger/claude-model-switcher&type=Date)](https://star-history.com/#cunninger/claude-model-switcher&Date) -->
+
+If you find this project helpful, please consider giving it a ⭐!
+
+---
 
 ## License
 
-[GPL-3.0](LICENSE)
+[GPL-3.0](LICENSE) © [cunninger](https://github.com/cunninger)
