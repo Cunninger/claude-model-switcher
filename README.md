@@ -92,7 +92,7 @@ cd claude-model-switcher
 | 🔄 **对话历史共享** | 所有模型的对话存储在统一目录，跨模型可无缝 `resume` |
 | ⚙️ **配置自动合并** | 基础配置 + 模型特定配置自动合并，无需维护多份 `settings.json` |
 | 🧙 **交互式添加模型** | `Add-ClaudeModel` 向导引导完成全部配置 |
-| 🛡️ **跨模型 Resume 安全** | 自动修复未完成的 tool call，避免切换模型后 400 错误 |
+| 🛡️ **跨模型 Resume 安全** | 可选修复未完成的 tool call，避免切换模型后 400 错误 |
 | 🔔 **Windows Toast 通知** | 任务完成时弹出通知 + 音效提醒 |
 | 📝 **动态注册** | 添加/删除模型后立即生效，无需重新加载脚本 |
 
@@ -192,6 +192,8 @@ Repair-ClaudeNotify
 | `Test-ModelNotify` | 试听通知效果 | 调试 |
 | `Repair-ClaudeConversation` | 修复对话中未完成的 tool call | 排错 |
 | `Test-ClaudeSwitcher` | 运行全面诊断，检查环境与配置 | 排错 |
+| `Repair-ClaudeSwitcher` | 自动修复 Profile、共享目录、链接和通知脚本 | 排错 |
+| `Test-ClaudeConversation` | 检查当前项目最近会话的 JSONL 健康状态 | 排错 |
 | `Update-ClaudeModelSwitcher` | 一键更新到最新版本 | 升级后 |
 | `Get-ClaudeSwitcherStatus` | 查看当前状态（模型数/活跃模型） | 日常 |
 
@@ -237,10 +239,33 @@ Repair-ClaudeNotify
 <details>
 <summary><b>Q: 切换模型后 resume 出现 400 错误？</b></summary>
 
-脚本已内置 `Repair-ClaudeConversation` 自动修复未完成的 tool call。若仍遇到问题，可手动运行：
+先运行只读健康检查，确认最近会话是否存在未闭合 tool call：
+
+```powershell
+Test-ClaudeConversation
+```
+
+脚本已内置 `Repair-ClaudeConversation` 修复未完成的 tool call。若需要切换模型时自动执行，可设置 `CLAUDE_SWITCHER_AUTO_REPAIR=1`；也可以手动运行：
 
 ```powershell
 Repair-ClaudeConversation
+```
+
+</details>
+
+<details>
+<summary><b>Q: 诊断发现 Profile、Junction 或通知脚本异常？</b></summary>
+
+先运行诊断：
+
+```powershell
+Test-ClaudeSwitcher
+```
+
+然后让脚本自动补齐常见环境问题：
+
+```powershell
+Repair-ClaudeSwitcher
 ```
 
 </details>
@@ -389,7 +414,7 @@ cd claude-model-switcher
 | 🔄 **Shared conversation history** | All models share a single conversation store; resume works across models |
 | ⚙️ **Auto-merged config** | Base settings + model-specific settings are merged automatically |
 | 🧙 **Interactive model wizard** | `Add-ClaudeModel` walks you through the full setup |
-| 🛡️ **Safe cross-model resume** | Automatically repairs incomplete tool calls to prevent API 400 errors |
+| 🛡️ **Safe cross-model resume** | Optionally repairs incomplete tool calls to prevent API 400 errors |
 | 🔔 **Windows Toast notifications** | Desktop notification + sound when Claude finishes |
 | 📝 **Dynamic registration** | Added/removed models take effect immediately |
 
@@ -489,6 +514,8 @@ Repair-ClaudeNotify
 | `Test-ModelNotify` | Preview notification effect | Debugging |
 | `Repair-ClaudeConversation` | Fix incomplete tool calls in conversation history | Troubleshooting |
 | `Test-ClaudeSwitcher` | Run full diagnostics on environment and config | Troubleshooting |
+| `Repair-ClaudeSwitcher` | Repair profile loader, shared directories, links, and notification scripts | Troubleshooting |
+| `Test-ClaudeConversation` | Check the latest JSONL conversation health for the current project | Troubleshooting |
 | `Update-ClaudeModelSwitcher` | One-click update to the latest version | After upgrade |
 | `Get-ClaudeSwitcherStatus` | Show current status (model count / active model) | Daily |
 
@@ -534,10 +561,33 @@ Repair-ClaudeNotify
 <details>
 <summary><b>Q: 400 error when resuming after switching models?</b></summary>
 
-The script includes `Repair-ClaudeConversation` to auto-fix incomplete tool calls. If issues persist, run manually:
+Run the read-only health check first to see whether the latest conversation has unclosed tool calls:
+
+```powershell
+Test-ClaudeConversation
+```
+
+The script includes `Repair-ClaudeConversation` to fix incomplete tool calls. Set `CLAUDE_SWITCHER_AUTO_REPAIR=1` to run it automatically when switching models, or run it manually:
 
 ```powershell
 Repair-ClaudeConversation
+```
+
+</details>
+
+<details>
+<summary><b>Q: Diagnostics report Profile, Junction, or notification issues?</b></summary>
+
+Run diagnostics first:
+
+```powershell
+Test-ClaudeSwitcher
+```
+
+Then repair common environment issues automatically:
+
+```powershell
+Repair-ClaudeSwitcher
 ```
 
 </details>

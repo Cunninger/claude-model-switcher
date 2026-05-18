@@ -20,12 +20,111 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ProfileMarkerBegin = "# >>> Claude Code Multi-Model Switcher >>>"
+$ProfileMarkerEnd   = "# <<< Claude Code Multi-Model Switcher <<<"
 
 # ---------- 颜色工具 ----------
 function Write-Info    { param([string]$Message) Write-Host "  $Message" -ForegroundColor Cyan }
 function Write-Success { param([string]$Message) Write-Host "  $Message" -ForegroundColor Green }
 function Write-Warn    { param([string]$Message) Write-Host "  $Message" -ForegroundColor Yellow }
 function Write-Error   { param([string]$Message) Write-Host "  $Message" -ForegroundColor Red }
+
+function New-UniqueTempDir {
+    param([string]$Prefix = "claude-model-switcher")
+
+    $path = Join-Path $env:TEMP "$Prefix-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Force -Path $path | Out-Null
+    return $path
+}
+
+function New-BackupPath {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $backupPath = "$Path.backup-$timestamp"
+    $i = 1
+    while (Test-Path -LiteralPath $backupPath) {
+        $backupPath = "$Path.backup-$timestamp-$i"
+        $i++
+    }
+    return $backupPath
+}
+
+function Install-StagedDirectory {
+    param(
+        [Parameter(Mandatory)][string]$StagingDir,
+        [Parameter(Mandatory)][string]$DestinationDir
+    )
+
+    $scriptPath = Join-Path $StagingDir "claude-model-switcher.ps1"
+    if (-not (Test-Path -LiteralPath $scriptPath)) {
+        throw "Staged directory is invalid: missing claude-model-switcher.ps1"
+    }
+
+    $parent = Split-Path -Parent $DestinationDir
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    }
+
+    $currentDir = (Get-Location).ProviderPath
+    if ($currentDir -and $currentDir.StartsWith($DestinationDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Set-Location $env:TEMP
+    }
+
+    $backupDir = $null
+    if (Test-Path -LiteralPath $DestinationDir) {
+        $backupDir = New-BackupPath -Path $DestinationDir
+        Move-Item -LiteralPath $DestinationDir -Destination $backupDir -Force
+    }
+
+    try {
+        Move-Item -LiteralPath $StagingDir -Destination $DestinationDir -Force
+        if ($backupDir -and (Test-Path -LiteralPath $backupDir)) {
+            Remove-Item -LiteralPath $backupDir -Recurse -Force
+        }
+    }
+    catch {
+        if ($backupDir -and (Test-Path -LiteralPath $backupDir) -and -not (Test-Path -LiteralPath $DestinationDir)) {
+            Move-Item -LiteralPath $backupDir -Destination $DestinationDir -Force
+        }
+        throw
+    }
+}
+
+function Set-ProfileLoaderBlock {
+    param(
+        [Parameter(Mandatory)][string]$ProfilePath,
+        [Parameter(Mandatory)][string]$ScriptPath
+    )
+
+    $block = @"
+$ProfileMarkerBegin
+`$env:CLAUDE_SWITCHER_QUIET = "1"
+. "$ScriptPath"
+$ProfileMarkerEnd
+"@
+
+    if (-not (Test-Path -LiteralPath $ProfilePath)) {
+        New-Item -Path $ProfilePath -ItemType File -Force | Out-Null
+        Write-Success "Created new profile: $ProfilePath"
+    }
+
+    $content = Get-Content -LiteralPath $ProfilePath -Raw -ErrorAction SilentlyContinue
+    if ($null -eq $content) { $content = "" }
+
+    $pattern = "(?s)\r?\n?$([regex]::Escape($ProfileMarkerBegin)).*?$([regex]::Escape($ProfileMarkerEnd))\r?\n?"
+    $content = [regex]::Replace($content, $pattern, "`n")
+
+    $lines = @($content -split "\r?\n") | Where-Object {
+        $_ -notmatch 'claude-model-switcher\.ps1' -and
+        $_ -notmatch '^\s*\$env:CLAUDE_SWITCHER_QUIET\s*=' -and
+        $_ -ne '# Claude Code Multi-Model Switcher'
+    }
+    $content = ($lines -join "`n").TrimEnd()
+
+    $newContent = if ($content) { "$content`n`n$block`n" } else { "$block`n" }
+    Set-Content -LiteralPath $ProfilePath -Value $newContent -NoNewline -Encoding UTF8
+}
 
 # ---------- 横幅 ----------
 Write-Host ""
@@ -59,7 +158,7 @@ if (-not $claudeCmd) {
 # ---------- 3. 下载/安装 ----------
 Write-Info "Installing to: $InstallDir"
 
-if (Test-Path $InstallDir) {
+if (Test-Path -LiteralPath $InstallDir) {
     if (-not $Force) {
         Write-Warn "Directory already exists: $InstallDir"
         $confirm = Read-Host "Overwrite? [y/N]"
@@ -68,16 +167,24 @@ if (Test-Path $InstallDir) {
             exit 0
         }
     }
-    Remove-Item -Recurse -Force $InstallDir
 }
 
 $hasGit = [bool](Get-Command git -ErrorAction SilentlyContinue)
+$stagingDir = $null
+$cleanupDir = $null
 
 if ($hasGit) {
     Write-Info "Git detected. Cloning repository..."
-    git clone --depth 1 https://github.com/cunninger/claude-model-switcher.git $InstallDir 2>&1 | Out-Null
+    $cleanupDir = New-UniqueTempDir -Prefix "claude-model-switcher-git"
+    $stagingDir = Join-Path $cleanupDir "repo"
+    git clone --depth 1 https://github.com/cunninger/claude-model-switcher.git $stagingDir 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Git clone failed. Falling back to zip download..."
+        if (Test-Path -LiteralPath $cleanupDir) {
+            Remove-Item -LiteralPath $cleanupDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        $stagingDir = $null
+        $cleanupDir = $null
         $hasGit = $false
     }
 }
@@ -85,7 +192,9 @@ if ($hasGit) {
 if (-not $hasGit) {
     Write-Info "Downloading latest archive..."
     $zipUrl = "https://github.com/cunninger/claude-model-switcher/archive/refs/heads/master.zip"
-    $zipPath = "$env:TEMP\claude-model-switcher.zip"
+    $cleanupDir = New-UniqueTempDir -Prefix "claude-model-switcher-zip"
+    $zipPath = Join-Path $cleanupDir "claude-model-switcher.zip"
+    $extractRoot = Join-Path $cleanupDir "extract"
 
     try {
         Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
@@ -95,12 +204,13 @@ if (-not $hasGit) {
     }
 
     Write-Info "Extracting..."
-    Expand-Archive -Path $zipPath -DestinationPath $env:TEMP -Force
-    $extracted = "$env:TEMP\claude-model-switcher-master"
+    Expand-Archive -Path $zipPath -DestinationPath $extractRoot -Force
+    $stagingDir = Join-Path $extractRoot "claude-model-switcher-master"
+}
 
-    if (Test-Path $InstallDir) { Remove-Item -Recurse -Force $InstallDir }
-    Move-Item -Path $extracted -Destination $InstallDir -Force
-    Remove-Item $zipPath -ErrorAction SilentlyContinue
+Install-StagedDirectory -StagingDir $stagingDir -DestinationDir $InstallDir
+if ($cleanupDir -and (Test-Path -LiteralPath $cleanupDir)) {
+    Remove-Item -LiteralPath $cleanupDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Success "Files installed to $InstallDir"
@@ -108,26 +218,9 @@ Write-Success "Files installed to $InstallDir"
 # ---------- 4. 配置 $PROFILE ----------
 Write-Info "Configuring PowerShell profile..."
 
-$profileLine = @"
-`$env:CLAUDE_SWITCHER_QUIET = "1"
-. "$InstallDir\claude-model-switcher.ps1"
-"@
-
-# 确保 $PROFILE 文件存在
-if (-not (Test-Path $PROFILE)) {
-    New-Item -Path $PROFILE -ItemType File -Force | Out-Null
-    Write-Success "Created new profile: $PROFILE"
-}
-
-# 检查是否已存在（避免重复添加）
-$profileContent = Get-Content $PROFILE -Raw -ErrorAction SilentlyContinue
-if ($profileContent -and $profileContent.Contains("claude-model-switcher.ps1")) {
-    Write-Warn "Profile already contains claude-model-switcher loader."
-    Write-Host "    Run '. `$PROFILE' manually if you want to reload." -ForegroundColor DarkGray
-} else {
-    Add-Content -Path $PROFILE -Value "`n# Claude Code Multi-Model Switcher`n$profileLine`n"
-    Write-Success "Added loader to `$PROFILE"
-}
+$scriptPath = Join-Path $InstallDir "claude-model-switcher.ps1"
+Set-ProfileLoaderBlock -ProfilePath $PROFILE -ScriptPath $scriptPath
+Write-Success "Updated loader in `$PROFILE"
 
 # ---------- 5. 立即加载 ----------
 Write-Info "Loading switcher in current session..."
@@ -154,4 +247,6 @@ Write-Host "Available commands:" -ForegroundColor Gray
 Write-Host "    Add-ClaudeModel      - Add a new model (interactive wizard)" -ForegroundColor Gray
 Write-Host "    Remove-ClaudeModel   - Remove a model" -ForegroundColor Gray
 Write-Host "    Test-ClaudeSwitcher  - Run diagnostics" -ForegroundColor Gray
+Write-Host "    Repair-ClaudeSwitcher - Repair common environment issues" -ForegroundColor Gray
+Write-Host "    Test-ClaudeConversation - Check current conversation health" -ForegroundColor Gray
 Write-Host ""

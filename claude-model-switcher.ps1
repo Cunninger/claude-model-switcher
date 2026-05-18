@@ -134,6 +134,61 @@ function Test-ClaudeSwitcherFlag {
     return $value -match '^(1|true|yes|on)$'
 }
 
+function Get-ClaudeSwitcherProfileBlock {
+    param([Parameter(Mandatory)][string]$ScriptPath)
+
+    return @"
+# >>> Claude Code Multi-Model Switcher >>>
+`$env:CLAUDE_SWITCHER_QUIET = "1"
+. "$ScriptPath"
+# <<< Claude Code Multi-Model Switcher <<<
+"@
+}
+
+function Set-ClaudeSwitcherProfileLoader {
+    param(
+        [Parameter(Mandatory)][string]$ProfilePath,
+        [Parameter(Mandatory)][string]$ScriptPath
+    )
+
+    $markerBegin = "# >>> Claude Code Multi-Model Switcher >>>"
+    $markerEnd = "# <<< Claude Code Multi-Model Switcher <<<"
+    $block = Get-ClaudeSwitcherProfileBlock -ScriptPath $ScriptPath
+
+    if (-not (Test-Path -LiteralPath $ProfilePath)) {
+        New-Item -Path $ProfilePath -ItemType File -Force | Out-Null
+    }
+
+    $content = Get-Content -LiteralPath $ProfilePath -Raw -ErrorAction SilentlyContinue
+    if ($null -eq $content) { $content = "" }
+
+    $pattern = "(?s)\r?\n?$([regex]::Escape($markerBegin)).*?$([regex]::Escape($markerEnd))\r?\n?"
+    $content = [regex]::Replace($content, $pattern, "`n")
+
+    $lines = @($content -split "\r?\n") | Where-Object {
+        $_ -notmatch 'claude-model-switcher\.ps1' -and
+        $_ -notmatch '^\s*\$env:CLAUDE_SWITCHER_QUIET\s*=' -and
+        $_ -ne '# Claude Code Multi-Model Switcher'
+    }
+    $content = ($lines -join "`n").TrimEnd()
+
+    $newContent = if ($content) { "$content`n`n$block`n" } else { "$block`n" }
+    Set-Content -LiteralPath $ProfilePath -Value $newContent -NoNewline -Encoding UTF8
+}
+
+function Get-ClaudeProjectConversationDirectory {
+    param([string]$ProjectDir = $PWD)
+
+    try {
+        $resolved = (Resolve-Path -LiteralPath $ProjectDir -ErrorAction Stop).ProviderPath
+    }
+    catch {
+        $resolved = [string]$ProjectDir
+    }
+    $sanitized = ($resolved -replace ':','') -replace '\\','-'
+    return Join-Path $script:SharedProjects $sanitized
+}
+
 function Remove-DirectoryReparsePoint {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -153,6 +208,41 @@ function Move-ExistingPathAside {
     Move-Item -LiteralPath $Path -Destination $backupPath -Force
     Write-Warning "已将现有路径备份到: $backupPath"
     return $backupPath
+}
+
+function Move-StagedDirectoryIntoPlace {
+    param(
+        [Parameter(Mandatory)][string]$StagingDir,
+        [Parameter(Mandatory)][string]$DestinationDir
+    )
+
+    if (-not (Test-Path -LiteralPath (Join-Path $StagingDir "claude-model-switcher.ps1"))) {
+        throw "更新包无效：缺少 claude-model-switcher.ps1"
+    }
+
+    $currentDir = (Get-Location).ProviderPath
+    if ($currentDir -and $currentDir.StartsWith($DestinationDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Set-Location $env:TEMP
+    }
+
+    $backupDir = $null
+    if (Test-Path -LiteralPath $DestinationDir) {
+        $backupDir = New-BackupPath -Path $DestinationDir
+        Move-Item -LiteralPath $DestinationDir -Destination $backupDir -Force
+    }
+
+    try {
+        Move-Item -LiteralPath $StagingDir -Destination $DestinationDir -Force
+        if ($backupDir -and (Test-Path -LiteralPath $backupDir)) {
+            Remove-Item -LiteralPath $backupDir -Recurse -Force
+        }
+    }
+    catch {
+        if ($backupDir -and (Test-Path -LiteralPath $backupDir) -and -not (Test-Path -LiteralPath $DestinationDir)) {
+            Move-Item -LiteralPath $backupDir -Destination $DestinationDir -Force
+        }
+        throw
+    }
 }
 
 function Set-ClaudeModelAlias {
@@ -399,8 +489,7 @@ function Repair-ClaudeConversation {
         [int]$MaxEvents = 0
     )
 
-    $sanitized = ($ProjectDir -replace ':','') -replace '\\','-'
-    $convDir = "$env:USERPROFILE\.claude-shared\projects\$sanitized"
+    $convDir = Get-ClaudeProjectConversationDirectory -ProjectDir $ProjectDir
     if (-not (Test-Path -LiteralPath $convDir)) { return }
 
     $files = Get-ChildItem -LiteralPath $convDir -Filter "*.jsonl" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -1357,13 +1446,15 @@ function Test-ClaudeSwitcher {
     [CmdletBinding()]
     param()
 
-    $pass = 0
-    $warn = 0
-    $fail = 0
+    $counts = @{
+        Pass = 0
+        Warn = 0
+        Fail = 0
+    }
 
-    function _ok  { param($msg) Write-Host "  [PASS] $msg" -ForegroundColor Green; $script:pass++ }
-    function _warn { param($msg) Write-Host "  [WARN] $msg" -ForegroundColor Yellow; $script:warn++ }
-    function _err  { param($msg) Write-Host "  [FAIL] $msg" -ForegroundColor Red; $script:fail++ }
+    function _ok  { param($msg) Write-Host "  [PASS] $msg" -ForegroundColor Green; $counts.Pass++ }
+    function _warn { param($msg) Write-Host "  [WARN] $msg" -ForegroundColor Yellow; $counts.Warn++ }
+    function _err  { param($msg) Write-Host "  [FAIL] $msg" -ForegroundColor Red; $counts.Fail++ }
 
     Write-Host "`nClaude Model Switcher Diagnostics`n=================================" -ForegroundColor Cyan
 
@@ -1490,7 +1581,315 @@ function Test-ClaudeSwitcher {
 
     # 汇总
     Write-Host "`n---------------------------------" -ForegroundColor White
-    Write-Host "Results: $pass passed, $warn warnings, $fail errors" -ForegroundColor $(if ($fail -gt 0) { 'Red' } elseif ($warn -gt 0) { 'Yellow' } else { 'Green' })
+    Write-Host "Results: $($counts.Pass) passed, $($counts.Warn) warnings, $($counts.Fail) errors" -ForegroundColor $(if ($counts.Fail -gt 0) { 'Red' } elseif ($counts.Warn -gt 0) { 'Yellow' } else { 'Green' })
+    Write-Host ""
+}
+
+# ---------- 公开函数：自动修复安装和模型环境 ----------
+
+function Repair-ClaudeSwitcher {
+    <#
+    修复常见安装和运行环境问题：
+    - 重写 PowerShell Profile 加载块
+    - 创建共享目录
+    - 补齐模型目录、model-specific.json、共享 Junction
+    - 补齐 notify.ps1 / Stop hook
+    #>
+    [CmdletBinding()]
+    param(
+        [switch]$DryRun
+    )
+
+    function _step {
+        param([string]$Message)
+        Write-Host "  $Message" -ForegroundColor Cyan
+    }
+    function _ok {
+        param([string]$Message)
+        Write-Host "  [OK] $Message" -ForegroundColor Green
+    }
+    function _warn {
+        param([string]$Message)
+        Write-Host "  [WARN] $Message" -ForegroundColor Yellow
+    }
+
+    Write-Host "`nRepair Claude Model Switcher`n============================" -ForegroundColor Cyan
+    if ($DryRun) {
+        Write-Host "Dry-run mode: no changes will be written.`n" -ForegroundColor Yellow
+    }
+
+    $scriptPath = Join-Path $script:InstallDir "claude-model-switcher.ps1"
+    _step "Checking profile loader"
+    if (Test-Path -LiteralPath $scriptPath) {
+        if (-not $DryRun) {
+            Set-ClaudeSwitcherProfileLoader -ProfilePath $PROFILE -ScriptPath $scriptPath
+        }
+        _ok "Profile loader points to: $scriptPath"
+    }
+    else {
+        _warn "Cannot repair profile loader because script path is uncertain: $scriptPath"
+    }
+
+    _step "Checking shared directories"
+    if (-not $DryRun) {
+        Initialize-SharedDirs
+    }
+    foreach ($dir in @($script:SharedRoot, $script:SharedConv, $script:SharedProjects)) {
+        if (Test-Path -LiteralPath $dir) {
+            _ok $dir
+        }
+        elseif ($DryRun) {
+            _warn "Would create: $dir"
+        }
+        else {
+            _warn "Missing: $dir"
+        }
+    }
+
+    _step "Checking registry and models"
+    if (-not $script:Registry -or $script:Registry.Count -eq 0) {
+        _warn "No registered models found. Run Add-ClaudeModel to create one."
+        return
+    }
+
+    $baseCommandsDir = "$env:USERPROFILE\.claude\commands"
+    $baseSkillsDir = "$env:USERPROFILE\.claude\skills"
+    if (-not $DryRun) {
+        New-Item -ItemType Directory -Force -Path $baseCommandsDir | Out-Null
+        New-Item -ItemType Directory -Force -Path $baseSkillsDir | Out-Null
+    }
+
+    foreach ($key in ($script:Registry.Keys | Sort-Object)) {
+        if (-not (Test-ClaudeModelKey -Key $key)) {
+            _warn "Skipping invalid model key: $key"
+            continue
+        }
+
+        $meta = $script:Registry[$key]
+        $configDir = "$env:USERPROFILE\.claude-$key"
+        $modelSpecificPath = Join-Path $configDir "model-specific.json"
+        $notifyPath = Join-Path $configDir "notify.ps1"
+        Write-Host "`n  Model: $key" -ForegroundColor White
+
+        if (-not $DryRun) {
+            New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+        }
+        if (Test-Path -LiteralPath $configDir) {
+            _ok "Directory: $configDir"
+        }
+        elseif ($DryRun) {
+            _warn "Would create directory: $configDir"
+        }
+        else {
+            _warn "Directory still missing after repair: $configDir"
+        }
+
+        if (-not (Test-Path -LiteralPath $modelSpecificPath)) {
+            _warn "model-specific.json missing; creating empty template"
+            if (-not $DryRun) {
+                [ordered]@{ env = [ordered]@{}; hooks = @{} } |
+                    ConvertTo-Json -Depth 10 |
+                    Set-Content -LiteralPath $modelSpecificPath -Encoding UTF8
+            }
+        }
+        else {
+            try {
+                $null = Get-Content -LiteralPath $modelSpecificPath -Raw | ConvertFrom-Json -ErrorAction Stop
+                _ok "model-specific.json valid"
+            }
+            catch {
+                _warn "model-specific.json parse error; left unchanged: $_"
+            }
+        }
+
+        if (-not $DryRun) {
+            New-DirectoryLink -LinkPath (Join-Path $configDir "conversations") -TargetPath $script:SharedConv
+            New-DirectoryLink -LinkPath (Join-Path $configDir "projects") -TargetPath $script:SharedProjects
+            New-DirectoryLink -LinkPath (Join-Path $configDir "commands") -TargetPath $baseCommandsDir
+            New-DirectoryLink -LinkPath (Join-Path $configDir "skills") -TargetPath $baseSkillsDir
+        }
+        _ok "Shared links checked"
+
+        $needsNotifyRepair = -not (Test-Path -LiteralPath $notifyPath)
+        if (-not $needsNotifyRepair -and (Test-Path -LiteralPath $modelSpecificPath)) {
+            try {
+                $modelJson = Get-Content -LiteralPath $modelSpecificPath -Raw | ConvertFrom-Json | ConvertTo-HashtableDeep
+                $needsNotifyRepair = -not $modelJson.hooks -or -not $modelJson.hooks.Contains('Stop')
+            }
+            catch {
+                $needsNotifyRepair = $false
+            }
+        }
+
+        if ($needsNotifyRepair) {
+            _warn "Notification hook missing; regenerating"
+            if (-not $DryRun) {
+                $soundType = if ($meta.sound -and $meta.sound.type) { $meta.sound.type } else { "preset" }
+                $soundValue = if ($meta.sound -and $meta.sound.value) { $meta.sound.value } else { "Reminder" }
+                New-ClaudeNotifyScript -ConfigDir $configDir -ModelKey $key -SoundType $soundType -SoundValue $soundValue
+            }
+        }
+        else {
+            _ok "Notification hook present"
+        }
+    }
+
+    Write-Host "`nRepair complete. Run Test-ClaudeSwitcher to verify." -ForegroundColor Green
+}
+
+# ---------- 公开函数：检查当前项目会话健康 ----------
+
+function Test-ClaudeConversation {
+    <#
+    检查当前项目最近的 Claude JSONL 会话文件，不修改历史。
+    报告 JSON 解析、未闭合 tool_use、parentUuid 链、thinking 块等风险。
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$ProjectDir = $PWD
+    )
+
+    $counts = @{
+        Pass = 0
+        Warn = 0
+        Fail = 0
+    }
+
+    function _ok { param($msg) Write-Host "  [PASS] $msg" -ForegroundColor Green; $counts.Pass++ }
+    function _warn { param($msg) Write-Host "  [WARN] $msg" -ForegroundColor Yellow; $counts.Warn++ }
+    function _err { param($msg) Write-Host "  [FAIL] $msg" -ForegroundColor Red; $counts.Fail++ }
+
+    Write-Host "`nClaude Conversation Health Check`n================================" -ForegroundColor Cyan
+
+    $convDir = Get-ClaudeProjectConversationDirectory -ProjectDir $ProjectDir
+    Write-Host "Project: $ProjectDir" -ForegroundColor Gray
+    Write-Host "Conversation dir: $convDir" -ForegroundColor Gray
+
+    if (-not (Test-Path -LiteralPath $convDir)) {
+        _warn "Conversation directory does not exist yet"
+        return
+    }
+
+    $file = Get-ChildItem -LiteralPath $convDir -Filter "*.jsonl" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if (-not $file) {
+        _warn "No JSONL conversation files found"
+        return
+    }
+
+    Write-Host "File: $($file.FullName)" -ForegroundColor Gray
+    Write-Host "Updated: $($file.LastWriteTime)" -ForegroundColor Gray
+
+    $lines = @(Get-Content -LiteralPath $file.FullName -Encoding UTF8)
+    if ($lines.Count -eq 0) {
+        _warn "Conversation file is empty"
+        return
+    }
+    _ok "Read $($lines.Count) JSONL events"
+
+    $events = [System.Collections.Generic.List[object]]::new()
+    $parseErrors = [System.Collections.Generic.List[int]]::new()
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        try {
+            $events.Add(($lines[$i] | ConvertFrom-Json -ErrorAction Stop))
+        }
+        catch {
+            $parseErrors.Add($i + 1)
+        }
+    }
+
+    if ($parseErrors.Count -gt 0) {
+        _err "JSON parse errors at lines: $($parseErrors -join ', ')"
+        return
+    }
+    _ok "All events parse as JSON"
+
+    $uuidSet = @{}
+    $duplicateUuid = 0
+    foreach ($ev in $events) {
+        if ($ev.uuid) {
+            if ($uuidSet.ContainsKey($ev.uuid)) { $duplicateUuid++ }
+            $uuidSet[$ev.uuid] = $true
+        }
+    }
+    if ($duplicateUuid -gt 0) {
+        _warn "Duplicate uuid values found: $duplicateUuid"
+    }
+    else {
+        _ok "UUID values look unique"
+    }
+
+    $brokenParents = 0
+    foreach ($ev in $events) {
+        if ($ev.parentUuid -and -not $uuidSet.ContainsKey($ev.parentUuid)) {
+            $brokenParents++
+        }
+    }
+    if ($brokenParents -gt 0) {
+        _warn "parentUuid references missing events: $brokenParents"
+    }
+    else {
+        _ok "parentUuid references are consistent"
+    }
+
+    $pending = [ordered]@{}
+    $toolResults = 0
+    $thinkingBlocks = 0
+    $longThinkingBlocks = 0
+    $missingThinkingSignature = 0
+
+    for ($i = 0; $i -lt $events.Count; $i++) {
+        $ev = $events[$i]
+        $content = $ev.message.content
+        if (-not $content -or $content -is [string]) { continue }
+
+        foreach ($block in $content) {
+            if ($block.type -eq "tool_use" -and $block.id) {
+                $pending[$block.id] = @{
+                    Line = $i + 1
+                    Name = $block.name
+                }
+            }
+            elseif ($block.type -eq "tool_result" -and $block.tool_use_id) {
+                $toolResults++
+                if ($pending.Contains($block.tool_use_id)) {
+                    $pending.Remove($block.tool_use_id)
+                }
+            }
+            elseif ($block.type -eq "thinking") {
+                $thinkingBlocks++
+                if ($block.thinking -and $block.thinking.Length -gt 200) {
+                    $longThinkingBlocks++
+                }
+                if ($null -eq $block.signature) {
+                    $missingThinkingSignature++
+                }
+            }
+        }
+    }
+
+    if ($pending.Count -gt 0) {
+        _err "Unclosed tool_use blocks: $($pending.Count)"
+        foreach ($entry in $pending.GetEnumerator()) {
+            Write-Host "    line $($entry.Value.Line): $($entry.Value.Name) ($($entry.Key))" -ForegroundColor Yellow
+        }
+        Write-Host "    Suggested repair: Repair-ClaudeConversation" -ForegroundColor Cyan
+    }
+    else {
+        _ok "No unclosed tool_use blocks"
+    }
+
+    _ok "tool_result blocks: $toolResults"
+    if ($thinkingBlocks -gt 0) {
+        _warn "thinking blocks found: $thinkingBlocks (long: $longThinkingBlocks, missing signature: $missingThinkingSignature)"
+    }
+    else {
+        _ok "No thinking blocks found"
+    }
+
+    Write-Host "`n---------------------------------" -ForegroundColor White
+    Write-Host "Results: $($counts.Pass) passed, $($counts.Warn) warnings, $($counts.Fail) errors" -ForegroundColor $(if ($counts.Fail -gt 0) { 'Red' } elseif ($counts.Warn -gt 0) { 'Yellow' } else { 'Green' })
     Write-Host ""
 }
 
@@ -1530,17 +1929,19 @@ function Update-ClaudeModelSwitcher {
     } else {
         Write-Host "  检测到 Zip 安装，下载最新代码..." -ForegroundColor Gray
         $zipUrl = "https://github.com/cunninger/claude-model-switcher/archive/refs/heads/master.zip"
-        $zipPath = "$env:TEMP\claude-model-switcher-update.zip"
+        $updateRoot = Join-Path $env:TEMP "claude-model-switcher-update-$([guid]::NewGuid().ToString('N'))"
+        $zipPath = Join-Path $updateRoot "claude-model-switcher-update.zip"
+        $extractRoot = Join-Path $updateRoot "extract"
 
         try {
+            New-Item -ItemType Directory -Force -Path $updateRoot | Out-Null
             Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
-            Expand-Archive -Path $zipPath -DestinationPath $env:TEMP -Force
-            $extracted = "$env:TEMP\claude-model-switcher-master"
+            Expand-Archive -Path $zipPath -DestinationPath $extractRoot -Force
+            $extracted = Join-Path $extractRoot "claude-model-switcher-master"
 
             # 保留用户数据（注册表和模型目录都在外部）
-            Remove-Item -Recurse -Force $installDir
-            Move-Item -Path $extracted -Destination $installDir -Force
-            Remove-Item $zipPath -ErrorAction SilentlyContinue
+            Move-StagedDirectoryIntoPlace -StagingDir $extracted -DestinationDir $installDir
+            Remove-Item -LiteralPath $updateRoot -Recurse -Force -ErrorAction SilentlyContinue
             Write-Success "  Zip 更新完成"
         } catch {
             Write-Error "下载/解压失败: $_"
@@ -1593,6 +1994,8 @@ if (-not (Test-ClaudeSwitcherFlag -Name "CLAUDE_SWITCHER_QUIET")) {
     Write-Host "试听通知效果: 运行 Test-ModelNotify" -ForegroundColor Cyan
     Write-Host "修复对话状态: 运行 Repair-ClaudeConversation" -ForegroundColor Cyan
     Write-Host "运行诊断: 运行 Test-ClaudeSwitcher" -ForegroundColor Cyan
+    Write-Host "自动修复环境: 运行 Repair-ClaudeSwitcher" -ForegroundColor Cyan
+    Write-Host "检查会话健康: 运行 Test-ClaudeConversation" -ForegroundColor Cyan
     Write-Host "检查更新: 运行 Update-ClaudeModelSwitcher" -ForegroundColor Cyan
     Write-Host "自动修复对话: 设置 CLAUDE_SWITCHER_AUTO_REPAIR=1 后切换模型时启用" -ForegroundColor DarkGray
     Write-Host "对话历史共享目录: $script:SharedRoot" -ForegroundColor DarkGray

@@ -19,6 +19,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ProfileMarkerBegin = "# >>> Claude Code Multi-Model Switcher >>>"
+$ProfileMarkerEnd   = "# <<< Claude Code Multi-Model Switcher <<<"
 
 # ---------- 颜色工具 ----------
 function Write-Info    { param([string]$Message) Write-Host "  $Message" -ForegroundColor Cyan }
@@ -26,17 +28,80 @@ function Write-Success { param([string]$Message) Write-Host "  $Message" -Foregr
 function Write-Warn    { param([string]$Message) Write-Host "  $Message" -ForegroundColor Yellow }
 function Write-Error   { param([string]$Message) Write-Host "  $Message" -ForegroundColor Red }
 
+function Remove-ProfileLoaderBlock {
+    param([Parameter(Mandatory)][string]$ProfilePath)
+
+    if (-not (Test-Path -LiteralPath $ProfilePath)) {
+        Write-Warn "`$PROFILE does not exist"
+        return
+    }
+
+    $content = Get-Content -LiteralPath $ProfilePath -Raw -ErrorAction SilentlyContinue
+    if ($null -eq $content) { $content = "" }
+    $original = $content
+
+    $pattern = "(?s)\r?\n?$([regex]::Escape($ProfileMarkerBegin)).*?$([regex]::Escape($ProfileMarkerEnd))\r?\n?"
+    $content = [regex]::Replace($content, $pattern, "`n")
+
+    $lines = @($content -split "\r?\n") | Where-Object {
+        $_ -notmatch 'claude-model-switcher\.ps1' -and
+        $_ -notmatch '^\s*\$env:CLAUDE_SWITCHER_QUIET\s*=' -and
+        $_ -ne '# Claude Code Multi-Model Switcher'
+    }
+    $content = ($lines -join "`n").TrimEnd()
+    if ($content) { $content = "$content`n" }
+
+    if ($content -ne $original) {
+        Set-Content -LiteralPath $ProfilePath -Value $content -NoNewline -Encoding UTF8
+        Write-Success "Removed loader from `$PROFILE"
+    } else {
+        Write-Warn "No claude-model-switcher loader found in `$PROFILE"
+    }
+}
+
+function Get-RegisteredModelDataPaths {
+    $sharedRoot = "$env:USERPROFILE\.claude-shared"
+    $registryPath = Join-Path $sharedRoot "models-registry.json"
+    $paths = [System.Collections.Generic.List[string]]::new()
+
+    if (Test-Path -LiteralPath $sharedRoot) {
+        $paths.Add($sharedRoot)
+    }
+
+    if (-not (Test-Path -LiteralPath $registryPath)) {
+        Write-Warn "Registry not found; only shared data can be removed safely."
+        return @($paths)
+    }
+
+    try {
+        $registry = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json -ErrorAction Stop
+        foreach ($prop in $registry.PSObject.Properties) {
+            if ($prop.Name -match '^[a-z0-9_]+$') {
+                $modelDir = Join-Path $env:USERPROFILE ".claude-$($prop.Name)"
+                if (Test-Path -LiteralPath $modelDir) {
+                    $paths.Add($modelDir)
+                }
+            }
+        }
+    }
+    catch {
+        Write-Warn "Registry JSON parse failed; model directories will not be removed automatically: $_"
+    }
+
+    return @($paths | Select-Object -Unique)
+}
+
 # ---------- 安全删除重解析点 ----------
 function Remove-SafeReparsePoint {
     param([string]$Path)
-    if (-not (Test-Path $Path)) { return }
-    $item = Get-Item $Path -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
     if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-        [System.IO.Directory]::Delete($Path, $false)
+        [System.IO.Directory]::Delete($item.FullName, $false)
     } elseif ($item.PSIsContainer) {
-        Remove-Item -Recurse -Force $Path
+        Remove-Item -LiteralPath $item.FullName -Recurse -Force
     } else {
-        Remove-Item -Force $Path
+        Remove-Item -LiteralPath $item.FullName -Force
     }
 }
 
@@ -49,30 +114,7 @@ Write-Host ""
 
 # ---------- 1. 从 $PROFILE 移除 ----------
 Write-Info "Checking PowerShell profile..."
-if (Test-Path $PROFILE) {
-    $content = Get-Content $PROFILE -Raw -ErrorAction SilentlyContinue
-    if ($content -and $content.Contains("claude-model-switcher.ps1")) {
-        $lines = Get-Content $PROFILE
-        $newLines = $lines | Where-Object {
-            -not ($_ -match "claude-model-switcher")
-        }
-        # 同时移除空行块（如果留下连续空行）
-        $cleaned = @()
-        $prevEmpty = $false
-        foreach ($line in $newLines) {
-            $isEmpty = [string]::IsNullOrWhiteSpace($line)
-            if ($isEmpty -and $prevEmpty) { continue }
-            $cleaned += $line
-            $prevEmpty = $isEmpty
-        }
-        Set-Content -Path $PROFILE -Value ($cleaned -join "`n") -NoNewline
-        Write-Success "Removed loader from `$PROFILE"
-    } else {
-        Write-Warn "No claude-model-switcher loader found in `$PROFILE"
-    }
-} else {
-    Write-Warn "`$PROFILE does not exist"
-}
+Remove-ProfileLoaderBlock -ProfilePath $PROFILE
 
 # ---------- 2. 删除脚本文件 ----------
 $removeScript = $true
@@ -84,10 +126,10 @@ if (-not $Yes) {
     }
 }
 
-if ($removeScript -and (Test-Path $InstallDir)) {
-    Remove-Item -Recurse -Force $InstallDir
+if ($removeScript -and (Test-Path -LiteralPath $InstallDir)) {
+    Remove-Item -LiteralPath $InstallDir -Recurse -Force
     Write-Success "Removed script directory: $InstallDir"
-} elseif (-not (Test-Path $InstallDir)) {
+} elseif (-not (Test-Path -LiteralPath $InstallDir)) {
     Write-Warn "Script directory not found: $InstallDir"
 }
 
@@ -95,24 +137,33 @@ if ($removeScript -and (Test-Path $InstallDir)) {
 $removeData = $RemoveData
 if (-not $Yes -and -not $RemoveData) {
     Write-Host ""
-    Write-Warn "WARNING: This will delete ALL model configs and conversation history!"
-    $ans = Read-Host "Remove all model data (~/.claude-* and ~/.claude-shared) ? [y/N]"
+    Write-Warn "WARNING: This can delete registered model configs and shared conversation history."
+    $ans = Read-Host "Remove registered model data and ~/.claude-shared ? [y/N]"
     if ($ans.Trim().ToLower() -in @('y','yes')) {
         $removeData = $true
     }
 }
 
 if ($removeData) {
-    $sharedRoot = "$env:USERPROFILE\.claude-shared"
-    if (Test-Path $sharedRoot) {
-        Remove-SafeReparsePoint $sharedRoot
-        Write-Success "Removed shared data: $sharedRoot"
+    $dataPaths = @(Get-RegisteredModelDataPaths)
+    if ($dataPaths.Count -eq 0) {
+        Write-Warn "No registered model data found."
     }
-
-    $modelDirs = Get-ChildItem -Path "$env:USERPROFILE" -Directory -Filter ".claude-*" -ErrorAction SilentlyContinue
-    foreach ($dir in $modelDirs) {
-        Remove-SafeReparsePoint $dir.FullName
-        Write-Success "Removed model data: $($dir.FullName)"
+    else {
+        Write-Host ""
+        Write-Warn "The following registered data paths will be removed:"
+        $dataPaths | ForEach-Object { Write-Host "    $_" -ForegroundColor Yellow }
+        if (-not $Yes) {
+            $confirm = Read-Host "Type DELETE to confirm"
+            if ($confirm -ne "DELETE") {
+                Write-Warn "Model data removal cancelled."
+                $dataPaths = @()
+            }
+        }
+        foreach ($path in $dataPaths) {
+            Remove-SafeReparsePoint $path
+            Write-Success "Removed data: $path"
+        }
     }
 } else {
     Write-Info "Model data preserved."
