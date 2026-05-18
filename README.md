@@ -22,9 +22,7 @@
   <a href="#english">English</a>
 </p>
 
-<!-- 演示 GIF 占位 -->
-<!-- 建议：录制 10-15s 的asciinema或ScreenToGif，展示 deepseek → qwen → gpt4o 的切换过程 -->
-<!-- <img src="docs/demo.gif" alt="Demo" width="80%" /> -->
+<img src="docs/demo.gif" alt="Demo" width="80%" />
 
 </div>
 
@@ -391,6 +389,8 @@ Install-Module -Name BurntToast -Scope CurrentUser -Force
   <a href="#commands">Commands</a> •
   <a href="#中文">中文</a>
 </p>
+
+<img src="docs/demo.gif" alt="Demo" width="80%" />
 
 </div>
 
