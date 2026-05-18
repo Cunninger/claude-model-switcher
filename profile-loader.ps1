@@ -41,8 +41,8 @@ function Remove-ClaudeSwitcherProfileBlock {
 
 function Set-ClaudeSwitcherProfileLoader {
     param(
-        [Parameter(Mandatory)][string]$ProfilePath,
-        [Parameter(Mandatory)][string]$ScriptPath,
+        [string]$ProfilePath = $PROFILE,
+        [string]$ScriptPath = (Join-Path $env:LOCALAPPDATA "claude-model-switcher\claude-model-switcher.ps1"),
         [ValidateSet("full", "brief", "none")]
         [string]$Banner = "brief"
     )
