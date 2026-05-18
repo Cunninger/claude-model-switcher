@@ -12,10 +12,12 @@
 
 # ---------- 配置区域 ----------
 
-$script:SharedRoot     = "$env:USERPROFILE\.claude-shared"
-$script:SharedConv     = "$script:SharedRoot\conversations"
-$script:SharedProjects = "$script:SharedRoot\projects"
-$script:RegistryPath   = "$script:SharedRoot\models-registry.json"
+$script:ClaudeSwitcherVersion = "1.1.0"
+$script:InstallDir            = if ($MyInvocation.MyCommand.Source) { Split-Path -Parent $MyInvocation.MyCommand.Source } elseif ($PSScriptRoot) { $PSScriptRoot } else { "." }
+$script:SharedRoot            = "$env:USERPROFILE\.claude-shared"
+$script:SharedConv            = "$script:SharedRoot\conversations"
+$script:SharedProjects        = "$script:SharedRoot\projects"
+$script:RegistryPath          = "$script:SharedRoot\models-registry.json"
 
 # ---------- 内部工具函数 ----------
 
@@ -50,6 +52,141 @@ function ConvertTo-HashtableDeep {
     }
 }
 
+function Test-ClaudeModelKey {
+    param([AllowEmptyString()][string]$Key)
+
+    return $Key -match '^[a-z0-9_]+$'
+}
+
+function Get-SafeConsoleColor {
+    param([string]$Color)
+
+    $validColors = [System.Enum]::GetNames([System.ConsoleColor])
+    if ($Color -in $validColors) { return $Color }
+    return "White"
+}
+
+function New-BackupPath {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $backupPath = "$Path.backup-$timestamp"
+    $i = 1
+    while (Test-Path -LiteralPath $backupPath) {
+        $backupPath = "$Path.backup-$timestamp-$i"
+        $i++
+    }
+    return $backupPath
+}
+
+function Ensure-ParentDirectory {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $parent = Split-Path -Parent $Path
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    }
+}
+
+function Write-TextFileAtomic {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Content
+    )
+
+    Ensure-ParentDirectory -Path $Path
+    $tmpPath = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
+    try {
+        $Content | Set-Content -LiteralPath $tmpPath -Encoding UTF8
+        Move-Item -LiteralPath $tmpPath -Destination $Path -Force
+    }
+    finally {
+        if (Test-Path -LiteralPath $tmpPath) {
+            Remove-Item -LiteralPath $tmpPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Write-JsonFileAtomic {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][object]$InputObject,
+        [int]$Depth = 10
+    )
+
+    Ensure-ParentDirectory -Path $Path
+    $tmpPath = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
+    try {
+        $InputObject | ConvertTo-Json -Depth $Depth | Set-Content -LiteralPath $tmpPath -Encoding UTF8
+        Move-Item -LiteralPath $tmpPath -Destination $Path -Force
+    }
+    finally {
+        if (Test-Path -LiteralPath $tmpPath) {
+            Remove-Item -LiteralPath $tmpPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Test-ClaudeSwitcherFlag {
+    param([Parameter(Mandatory)][string]$Name)
+
+    $value = [Environment]::GetEnvironmentVariable($Name, 'Process')
+    return $value -match '^(1|true|yes|on)$'
+}
+
+function Remove-DirectoryReparsePoint {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if ($item.PSIsContainer) {
+        [System.IO.Directory]::Delete($item.FullName, $false)
+    }
+    else {
+        Remove-Item -LiteralPath $item.FullName -Force
+    }
+}
+
+function Move-ExistingPathAside {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $backupPath = New-BackupPath -Path $Path
+    Move-Item -LiteralPath $Path -Destination $backupPath -Force
+    Write-Warning "已将现有路径备份到: $backupPath"
+    return $backupPath
+}
+
+function Set-ClaudeModelAlias {
+    param(
+        [Parameter(Mandatory)][string]$AliasName,
+        [Parameter(Mandatory)][string]$ModelKey
+    )
+
+    if ([string]::IsNullOrWhiteSpace($AliasName)) { return }
+    if (-not (Test-ClaudeModelKey -Key $AliasName)) {
+        Write-Warning "别名 '$AliasName' 包含非法字符，已跳过"
+        return
+    }
+
+    $existingAlias = Get-Alias -Name $AliasName -ErrorAction SilentlyContinue
+    if ($existingAlias -and $existingAlias.Definition -ne $ModelKey) {
+        Write-Warning "别名 '$AliasName' 已存在并指向 '$($existingAlias.Definition)'，已跳过"
+        return
+    }
+    if ($existingAlias) {
+        Remove-Alias -Name $AliasName -Force -Scope Global -ErrorAction SilentlyContinue
+    }
+
+    $conflict = Get-Command -Name $AliasName -All -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandType -ne 'Alias' } |
+        Select-Object -First 1
+    if ($conflict) {
+        Write-Warning "命令 '$AliasName' 已存在（$($conflict.CommandType)），已跳过别名创建"
+        return
+    }
+
+    Set-Alias -Name $AliasName -Value $ModelKey -Scope Global -Force
+}
+
 # ---------- 加载模型注册表 ----------
 
 function Import-ModelRegistry {
@@ -57,12 +194,16 @@ function Import-ModelRegistry {
     读取模型注册表 JSON。如果不存在则创建空文件。
     返回 Hashtable，键为模型标识，值为模型元数据。
     #>
-    if (-not (Test-Path $script:RegistryPath)) {
+    if (-not (Test-Path -LiteralPath $script:SharedRoot)) {
+        New-Item -ItemType Directory -Force -Path $script:SharedRoot | Out-Null
+    }
+
+    if (-not (Test-Path -LiteralPath $script:RegistryPath)) {
         # 首次运行：如果已有传统模型目录，自动迁移到注册表
         $migrated = @{}
         foreach ($legacy in @('zhipu','kimi','deepseek')) {
             $legacyDir = "$env:USERPROFILE\.claude-$legacy"
-            if (Test-Path $legacyDir) {
+            if (Test-Path -LiteralPath $legacyDir) {
                 $migrated[$legacy] = @{
                     name  = $legacy.ToUpper()
                     color = "White"
@@ -71,22 +212,22 @@ function Import-ModelRegistry {
             }
         }
         if ($migrated.Count -gt 0) {
-            $migrated | ConvertTo-Json -Depth 10 | Set-Content $script:RegistryPath
+            Write-JsonFileAtomic -Path $script:RegistryPath -InputObject $migrated
             Write-Host "已自动迁移现有模型到注册表: $script:RegistryPath" -ForegroundColor Yellow
             return $migrated
         }
         # 纯新环境，创建空注册表（直接写 '{}' 避免 @{} | ConvertTo-Json 在某些 PS 版本输出 []）
-        '{}' | Set-Content $script:RegistryPath
+        Write-TextFileAtomic -Path $script:RegistryPath -Content '{}'
         return @{}
     }
 
     try {
-        $raw = Get-Content $script:RegistryPath -Raw | ConvertFrom-Json
+        $raw = Get-Content -LiteralPath $script:RegistryPath -Raw | ConvertFrom-Json
     }
     catch {
         Write-Warning "注册表 JSON 解析失败: $_，将备份并重建"
-        Copy-Item $script:RegistryPath "$script:RegistryPath.bak" -Force -ErrorAction SilentlyContinue
-        '{}' | Set-Content $script:RegistryPath
+        Copy-Item -LiteralPath $script:RegistryPath -Destination (New-BackupPath -Path $script:RegistryPath) -Force -ErrorAction SilentlyContinue
+        Write-TextFileAtomic -Path $script:RegistryPath -Content '{}'
         return @{}
     }
     # ConvertFrom-Json 返回 PSCustomObject，递归转为 Hashtable 统一类型
@@ -101,11 +242,15 @@ $script:Registry = Import-ModelRegistry
 # 动态构建 Models 配置（Dir 统一按标识命名）
 $script:Models = @{}
 foreach ($key in $script:Registry.Keys) {
+    if (-not (Test-ClaudeModelKey -Key $key)) {
+        Write-Warning "注册表包含非法模型标识 '$key'，已跳过"
+        continue
+    }
     $meta = $script:Registry[$key]
     $script:Models[$key] = @{
         Dir   = "$env:USERPROFILE\.claude-$key"
         Name  = $meta.name
-        Color = $meta.color
+        Color = Get-SafeConsoleColor -Color $meta.color
     }
 }
 
@@ -117,7 +262,7 @@ function Initialize-SharedDirs {
     #>
     $dirs = @($script:SharedConv, $script:SharedProjects)
     foreach ($d in $dirs) {
-        if (-not (Test-Path $d)) {
+        if (-not (Test-Path -LiteralPath $d)) {
             New-Item -ItemType Directory -Force -Path $d | Out-Null
         }
     }
@@ -134,16 +279,26 @@ function New-DirectoryLink {
         [Parameter(Mandatory)][string]$TargetPath
     )
 
-    if (Test-Path $LinkPath) {
-        $item = Get-Item $LinkPath
-        if ($item.Attributes -match "ReparsePoint") {
-            [System.IO.Directory]::Delete($LinkPath, $false)
+    if (-not (Test-Path -LiteralPath $TargetPath)) {
+        New-Item -ItemType Directory -Force -Path $TargetPath | Out-Null
+    }
+
+    if (Test-Path -LiteralPath $LinkPath) {
+        $item = Get-Item -LiteralPath $LinkPath -Force
+        if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+            Remove-DirectoryReparsePoint -Path $LinkPath
         }
         elseif ($item.PSIsContainer) {
-            Remove-Item $LinkPath -Recurse -Force
+            $children = @(Get-ChildItem -LiteralPath $LinkPath -Force -ErrorAction SilentlyContinue)
+            if ($children.Count -eq 0) {
+                Remove-Item -LiteralPath $LinkPath -Force
+            }
+            else {
+                Move-ExistingPathAside -Path $LinkPath | Out-Null
+            }
         }
         else {
-            Remove-Item $LinkPath -Force
+            Move-ExistingPathAside -Path $LinkPath | Out-Null
         }
     }
 
@@ -170,25 +325,25 @@ function Merge-ClaudeSetting {
     )
 
     try {
-        if (-not (Test-Path $BasePath)) {
+        if (-not (Test-Path -LiteralPath $BasePath)) {
             Write-Warning "基础配置不存在: $BasePath，跳过合并"
             return
         }
 
-        $baseJson = Get-Content $BasePath -Raw | ConvertFrom-Json
+        $baseJson = Get-Content -LiteralPath $BasePath -Raw | ConvertFrom-Json
         $modelSpecificPath = Join-Path $ConfigDir "model-specific.json"
         $modelJson = $null
 
         # 优先读取 model-specific.json
-        if (Test-Path $modelSpecificPath) {
-            $modelJson = Get-Content $modelSpecificPath -Raw | ConvertFrom-Json
+        if (Test-Path -LiteralPath $modelSpecificPath) {
+            $modelJson = Get-Content -LiteralPath $modelSpecificPath -Raw | ConvertFrom-Json
         }
         # 兼容迁移：如果没有 model-specific.json，尝试从现有 settings.json 中提取
-        elseif (Test-Path $ModelPath) {
-            $existingJson = Get-Content $ModelPath -Raw | ConvertFrom-Json
+        elseif (Test-Path -LiteralPath $ModelPath) {
+            $existingJson = Get-Content -LiteralPath $ModelPath -Raw | ConvertFrom-Json
             $modelJson = $existingJson | Select-Object env, hooks
 
-            $modelJson | ConvertTo-Json -Depth 10 | Set-Content $modelSpecificPath
+            Write-JsonFileAtomic -Path $modelSpecificPath -InputObject $modelJson
             Write-Host "已自动迁移模型差异配置到: $modelSpecificPath" -ForegroundColor Yellow
         }
         # 全新模型：生成空模板
@@ -197,7 +352,7 @@ function Merge-ClaudeSetting {
                 env   = @{}
                 hooks = @{}
             }
-            $template | ConvertTo-Json -Depth 10 | Set-Content $modelSpecificPath
+            Write-JsonFileAtomic -Path $modelSpecificPath -InputObject $template
             Write-Warning "新建模型配置模板: $modelSpecificPath，请填写 API 配置后再启动"
             $modelJson = $template
         }
@@ -213,25 +368,17 @@ function Merge-ClaudeSetting {
         # 标记为自动生成
         $baseJson | Add-Member -NotePropertyName '__generated_by' -NotePropertyValue 'claude-model-switcher' -Force
 
-        # 原子写入（try/finally 确保清理临时文件）
-        $tmpPath = "$ModelPath.tmp"
-        try {
-            $baseJson | ConvertTo-Json -Depth 10 | Set-Content $tmpPath
-            Move-Item $tmpPath $ModelPath -Force
-        }
-        finally {
-            if (Test-Path $tmpPath) { Remove-Item $tmpPath -Force -ErrorAction SilentlyContinue }
-        }
+        Write-JsonFileAtomic -Path $ModelPath -InputObject $baseJson
 
     }
     catch {
         Write-Warning "配置合并失败: $_"
 
-        if (Test-Path $ModelPath) {
+        if (Test-Path -LiteralPath $ModelPath) {
             Write-Host "保留现有 settings.json，使用现有配置启动" -ForegroundColor Yellow
         }
-        elseif (Test-Path $BasePath) {
-            Copy-Item $BasePath $ModelPath -Force
+        elseif (Test-Path -LiteralPath $BasePath) {
+            Copy-Item -LiteralPath $BasePath -Destination $ModelPath -Force
             Write-Host "已复制基础配置作为保底" -ForegroundColor Yellow
         }
     }
@@ -242,50 +389,53 @@ function Repair-ClaudeConversation {
     自动检测并修复未完成的 tool call。
     扫描当前项目最近的 .jsonl 文件，若发现 assistant 消息中有 tool_use
     但没有对应 tool_result，则注入伪造的 user 消息完成链条。
-    同时清理 thinking 块、插入模型切换提示、可选截断过长历史。
+    可选清理 thinking 块、插入模型切换提示、可选截断过长历史。
     支持跨模型 resume 时避免 API 400 错误。
     #>
     param(
         [string]$ProjectDir = $PWD,
         [switch]$DryRun,
+        [switch]$FixThinking,
         [int]$MaxEvents = 0
     )
 
     $sanitized = ($ProjectDir -replace ':','') -replace '\\','-'
     $convDir = "$env:USERPROFILE\.claude-shared\projects\$sanitized"
-    if (-not (Test-Path $convDir)) { return }
+    if (-not (Test-Path -LiteralPath $convDir)) { return }
 
-    $files = Get-ChildItem $convDir -Filter "*.jsonl" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    $files = Get-ChildItem -LiteralPath $convDir -Filter "*.jsonl" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if (-not $files) { return }
 
     foreach ($file in $files) {
-        $lines = @(Get-Content $file.FullName -Encoding UTF8)
+        $lines = @(Get-Content -LiteralPath $file.FullName -Encoding UTF8)
         if ($lines.Count -eq 0) { continue }
 
         $modified = $false
         $events = $lines | ForEach-Object { $_ | ConvertFrom-Json }
 
-        # ── Step 1: 清理 thinking 块（截断过长 thinking，清理异常 signature）──
-        for ($i = 0; $i -lt $events.Count; $i++) {
-            $ev = $events[$i]
-            if ($ev.type -ne "assistant" -or -not $ev.message.content) { continue }
-            foreach ($block in $ev.message.content) {
-                if ($block.type -eq "thinking" -and $block.thinking) {
-                    $text = $block.thinking
-                    if ($text.Length -gt 200) {
-                        $block.thinking = $text.Substring(0, 200) + "...[truncated at model switch]"
-                        $modified = $true
-                    }
-                    if ($null -eq $block.signature -or $block.signature -eq $null) {
-                        $block | Add-Member -NotePropertyName 'signature' -NotePropertyValue '' -Force
-                        $modified = $true
+        # ── Step 1: 可选清理 thinking 块（截断过长 thinking，清理异常 signature）──
+        if ($FixThinking) {
+            for ($i = 0; $i -lt $events.Count; $i++) {
+                $ev = $events[$i]
+                if ($ev.type -ne "assistant" -or -not $ev.message.content) { continue }
+                foreach ($block in $ev.message.content) {
+                    if ($block.type -eq "thinking" -and $block.thinking) {
+                        $text = $block.thinking
+                        if ($text.Length -gt 200) {
+                            $block.thinking = $text.Substring(0, 200) + "...[truncated at model switch]"
+                            $modified = $true
+                        }
+                        if ($null -eq $block.signature -or $block.signature -eq $null) {
+                            $block | Add-Member -NotePropertyName 'signature' -NotePropertyValue '' -Force
+                            $modified = $true
+                        }
                     }
                 }
             }
         }
 
         # ── Step 2: 检测未闭合的 tool_use ──
-        $pending = @{}
+        $pending = [ordered]@{}
         for ($i = 0; $i -lt $events.Count; $i++) {
             $ev = $events[$i]
             if ($ev.type -eq "assistant" -and $ev.message.content) {
@@ -322,7 +472,7 @@ function Repair-ClaudeConversation {
             foreach ($entry in $pending.Values) {
                 Write-Host "  - $($entry.ToolName)"
             }
-            if ($modified) { Write-Host "  (thinking 块已清理)" -ForegroundColor DarkGray }
+            if ($modified) { Write-Host "  (thinking 块将被清理)" -ForegroundColor DarkGray }
             continue
         }
 
@@ -338,30 +488,32 @@ function Repair-ClaudeConversation {
 
         # ── Step 4: 注入 fake tool_result ──
         $lastUuid = $events[-1].uuid
-        foreach ($kv in $pending.GetEnumerator()) {
-            $toolUseId = $kv.Key
-            $entry     = $kv.Value
+        if ($needsRepair) {
+            $fakeContent = @()
+            foreach ($kv in $pending.GetEnumerator()) {
+                $toolUseId = $kv.Key
+                $entry     = $kv.Value
+                $fakeContent += [ordered]@{
+                    type        = "tool_result"
+                    tool_use_id = $toolUseId
+                    content     = @(@{ type = "text"; text = "Tool call interrupted by model switch. Please continue based on available context." })
+                    is_error    = $true
+                }
+                Write-Host "  ✅ 已准备 $($entry.ToolName) 的恢复消息" -ForegroundColor Green
+            }
             $fake = [ordered]@{
                 type       = "user"
-                parentUuid = $entry.AssistantUuid
+                parentUuid = $lastUuid
                 uuid       = [guid]::NewGuid().ToString()
                 timestamp  = (Get-Date -Format "o")
                 message    = [ordered]@{
                     role    = "user"
-                    content = @(
-                        [ordered]@{
-                            type        = "tool_result"
-                            tool_use_id = $toolUseId
-                            content     = @(@{ type = "text"; text = "Tool call interrupted by model switch. Please continue based on available context." })
-                            is_error    = $true
-                        }
-                    )
+                    content = $fakeContent
                 }
             }
             $fakeLine = $fake | ConvertTo-Json -Depth 10 -Compress
             $newLines.Add($fakeLine)
             $lastUuid = $fake.uuid
-            Write-Host "  ✅ 已注入 $($entry.ToolName) 的恢复消息" -ForegroundColor Green
         }
 
         # ── Step 5: 插入模型切换提示 ──
@@ -411,8 +563,17 @@ function Repair-ClaudeConversation {
 
         if ($modified -or $needsRepair -or ($MaxEvents -gt 0 -and $newLines.Count -ne $lines.Count)) {
             # 先备份再写入，防止写入中途失败导致对话历史损坏
-            Copy-Item $file.FullName "$($file.FullName).bak" -Force -ErrorAction SilentlyContinue
-            $newLines | Set-Content $file.FullName -Encoding UTF8
+            Copy-Item -LiteralPath $file.FullName -Destination (New-BackupPath -Path $file.FullName) -Force -ErrorAction SilentlyContinue
+            $tmpPath = "$($file.FullName).$([guid]::NewGuid().ToString('N')).tmp"
+            try {
+                $newLines | Set-Content -LiteralPath $tmpPath -Encoding UTF8
+                Move-Item -LiteralPath $tmpPath -Destination $file.FullName -Force
+            }
+            finally {
+                if (Test-Path -LiteralPath $tmpPath) {
+                    Remove-Item -LiteralPath $tmpPath -Force -ErrorAction SilentlyContinue
+                }
+            }
         }
     }
 }
@@ -425,7 +586,7 @@ function Enter-ClaudeModel {
     3. 将 conversations、projects 链接到共享目录
     4. 将 commands 链接到共享目录（自定义 skill 全模型通用）
     5. 设置 CLAUDE_CONFIG_DIR
-    6. 自动修复未完成的 tool call（跨模型 resume 安全）
+    6. 可选修复未完成的 tool call（跨模型 resume 安全）
     #>
     param(
         [Parameter(Mandatory)][string]$ModelKey
@@ -438,8 +599,7 @@ function Enter-ClaudeModel {
     }
 
     # 校验颜色值，防止 Write-Host 报错
-    $validColors = [System.Enum]::GetNames([System.ConsoleColor])
-    if ($cfg.Color -notin $validColors) { $cfg.Color = "White" }
+    $cfg.Color = Get-SafeConsoleColor -Color $cfg.Color
 
     $configDir = $cfg.Dir
 
@@ -456,14 +616,14 @@ function Enter-ClaudeModel {
 
     # 4. 链接 commands 目录（自定义 skill/alias 共享）
     $baseCommandsDir = "$env:USERPROFILE\.claude\commands"
-    if (-not (Test-Path $baseCommandsDir)) {
+    if (-not (Test-Path -LiteralPath $baseCommandsDir)) {
         New-Item -ItemType Directory -Force -Path $baseCommandsDir | Out-Null
     }
     New-DirectoryLink -LinkPath "$configDir\commands" -TargetPath $baseCommandsDir
 
     # 4b. 链接 skills 目录（第三方 skill 共享）
     $baseSkillsDir = "$env:USERPROFILE\.claude\skills"
-    if (-not (Test-Path $baseSkillsDir)) {
+    if (-not (Test-Path -LiteralPath $baseSkillsDir)) {
         New-Item -ItemType Directory -Force -Path $baseSkillsDir | Out-Null
     }
     New-DirectoryLink -LinkPath "$configDir\skills" -TargetPath $baseSkillsDir
@@ -475,8 +635,10 @@ function Enter-ClaudeModel {
     Write-Host "Shared Conversations: $script:SharedConv" -ForegroundColor DarkGray
     Write-Host "Shared Commands: $baseCommandsDir" -ForegroundColor DarkGray
 
-    # 6. 自动修复未完成的 tool call（跨模型 resume 安全）
-    Repair-ClaudeConversation -ProjectDir (Get-Location)
+    # 6. 可选自动修复未完成的 tool call（跨模型 resume 安全）
+    if (Test-ClaudeSwitcherFlag -Name "CLAUDE_SWITCHER_AUTO_REPAIR") {
+        Repair-ClaudeConversation -ProjectDir (Get-Location)
+    }
 }
 
 function New-ClaudeNotifyScript {
@@ -522,11 +684,11 @@ Start-Sleep -Seconds 2
 New-BurntToastNotification -Text "Claude Code (`$env:CLAUDE_CONFIG_DIR)", "Task complete (`$time) - your input is needed" -Sound "$SoundValue"
 "@
     }
-    $scriptContent | Set-Content $notifyPath -Encoding UTF8
+    Write-TextFileAtomic -Path $notifyPath -Content $scriptContent
 
     # 更新 model-specific.json 的 hooks
-    $modelJson = if (Test-Path $modelSpecificPath) {
-        Get-Content $modelSpecificPath -Raw | ConvertFrom-Json | ConvertTo-HashtableDeep
+    $modelJson = if (Test-Path -LiteralPath $modelSpecificPath) {
+        Get-Content -LiteralPath $modelSpecificPath -Raw | ConvertFrom-Json | ConvertTo-HashtableDeep
     } else { @{ env = @{}; hooks = @{} } }
 
     if (-not $modelJson.hooks) { $modelJson['hooks'] = @{} }
@@ -537,14 +699,14 @@ New-BurntToastNotification -Text "Claude Code (`$env:CLAUDE_CONFIG_DIR)", "Task 
     $hookEntry = @{
         hooks = @(@{
             type = "command"
-            command = "pwsh.exe -NoProfile -File $notifyPathUnix"
+            command = "pwsh.exe -NoProfile -File `"$notifyPathUnix`""
             async = $true
         })
     }
 
     $modelJson.hooks['Stop'] = @($hookEntry)
 
-    $modelJson | ConvertTo-Json -Depth 10 | Set-Content $modelSpecificPath
+    Write-JsonFileAtomic -Path $modelSpecificPath -InputObject $modelJson
 
     # 同步更新注册表的 sound 字段
     if ($script:Registry.ContainsKey($ModelKey)) {
@@ -556,7 +718,7 @@ New-BurntToastNotification -Text "Claude Code (`$env:CLAUDE_CONFIG_DIR)", "Task 
         $entry = $script:Registry[$ModelKey]
         # 注册表已统一为 Hashtable，直接赋值
         $entry['sound'] = $soundObj
-        $script:Registry | ConvertTo-Json -Depth 10 | Set-Content $script:RegistryPath
+        Write-JsonFileAtomic -Path $script:RegistryPath -InputObject $script:Registry
     }
 }
 
@@ -577,6 +739,10 @@ function Initialize-ModelFunctions {
     支持脚本重新加载时覆盖旧定义。
     #>
     foreach ($modelKey in $script:Registry.Keys) {
+        if (-not (Test-ClaudeModelKey -Key $modelKey)) {
+            Write-Warning "跳过非法模型标识 '$modelKey'"
+            continue
+        }
         $meta = $script:Registry[$modelKey]
 
         # 动态创建函数（使用 global: 作用域确保 dot-sourcing 后可见）
@@ -590,10 +756,7 @@ Enter-ClaudeModel "$modelKey"
 
         # 创建别名（如果指定）
         if ($meta.alias) {
-            if (Get-Alias -Name $meta.alias -ErrorAction SilentlyContinue) {
-                Remove-Alias -Name $meta.alias -Force -Scope Global -ErrorAction SilentlyContinue
-            }
-            Set-Alias -Name $meta.alias -Value $modelKey -Scope Global -Force
+            Set-ClaudeModelAlias -AliasName $meta.alias -ModelKey $modelKey
         }
     }
 }
@@ -625,12 +788,16 @@ function Add-ClaudeModel {
     }
     # 清理标识（去除空格和非法字符，转小写）
     $key = $key.Trim().ToLower() -replace '[^a-z0-9_]',''
-    if ([string]::IsNullOrWhiteSpace($key)) {
-        Write-Error "模型标识在清理后为空（仅包含特殊字符），请使用字母/数字"
+    if (-not (Test-ClaudeModelKey -Key $key)) {
+        Write-Error "模型标识只能包含小写字母、数字和下划线"
         return
     }
     if ($script:Registry.ContainsKey($key)) {
         Write-Error "模型 '$key' 已存在，请使用其他标识"
+        return
+    }
+    if (Get-Command -Name $key -ErrorAction SilentlyContinue) {
+        Write-Error "命令 '$key' 已存在，请使用其他模型标识"
         return
     }
 
@@ -647,10 +814,18 @@ function Add-ClaudeModel {
     Write-Host "单个字母的快捷命令，如 k、z、d。直接回车表示不创建别名" -ForegroundColor DarkGray
     $alias = Read-Host "别名"
     if ($alias) {
-        $alias = $alias.Trim().ToLower()
+        $alias = $alias.Trim().ToLower() -replace '[^a-z0-9_]',''
         $existingAlias = $script:Registry.Values | Where-Object { $_.alias -eq $alias }
         if ($existingAlias) {
             Write-Warning "别名 '$alias' 已被使用，将跳过别名创建"
+            $alias = $null
+        }
+        elseif (-not (Test-ClaudeModelKey -Key $alias)) {
+            Write-Warning "别名只能包含小写字母、数字和下划线，将跳过别名创建"
+            $alias = $null
+        }
+        elseif (Get-Command -Name $alias -ErrorAction SilentlyContinue) {
+            Write-Warning "命令或别名 '$alias' 已存在，将跳过别名创建"
             $alias = $null
         }
     }
@@ -709,7 +884,7 @@ function Add-ClaudeModel {
     elseif ($soundMap[$soundIdx].Type -eq "custom") {
         $soundType = "custom"
         $customPath = Read-Host "音频文件绝对路径（如 C:\\Music\\notify.wav）"
-        if (-not (Test-Path $customPath)) {
+        if (-not (Test-Path -LiteralPath $customPath)) {
             Write-Warning "文件不存在，回退到默认音效 Reminder"
             $soundType = "preset"
             $soundValue = "Reminder"
@@ -771,7 +946,7 @@ function Add-ClaudeModel {
             }
             hooks = @{}
         }
-        $modelSpecific | ConvertTo-Json -Depth 10 | Set-Content "$configDir\model-specific.json"
+        Write-JsonFileAtomic -Path "$configDir\model-specific.json" -InputObject $modelSpecific
         Write-Host "✅ 已生成 model-specific.json" -ForegroundColor Green
 
         # 2b. 生成 notify.ps1 和 hooks
@@ -788,7 +963,7 @@ function Add-ClaudeModel {
                 value = if ($soundType -eq "custom") { $soundValue -replace '\\','/' } else { $soundValue }
             }
         }
-        $script:Registry | ConvertTo-Json -Depth 10 | Set-Content $script:RegistryPath
+        Write-JsonFileAtomic -Path $script:RegistryPath -InputObject $script:Registry
 
         # 4. 动态注册到当前会话（global 作用域确保立即可用）
         $funcBody = [scriptblock]::Create(@"
@@ -804,10 +979,7 @@ Enter-ClaudeModel "$key"
             Color = $color
         }
         if ($alias) {
-            if (Get-Alias -Name $alias -ErrorAction SilentlyContinue) {
-                Remove-Alias -Name $alias -Force -Scope Global -ErrorAction SilentlyContinue
-            }
-            Set-Alias -Name $alias -Value $key -Scope Global -Force
+            Set-ClaudeModelAlias -AliasName $alias -ModelKey $key
         }
         Write-Host "✅ 已注册到模型列表" -ForegroundColor Green
 
@@ -860,7 +1032,7 @@ function Remove-ClaudeModel {
     foreach ($key in $script:Registry.Keys | Sort-Object) {
         $meta = $script:Registry[$key]
         $aliasInfo = if ($meta.alias) { " [别名: $($meta.alias)]" } else { "" }
-        Write-Host "  $idx. $($meta.name)$aliasInfo" -ForegroundColor $meta.color
+        Write-Host "  $idx. $($meta.name)$aliasInfo" -ForegroundColor (Get-SafeConsoleColor -Color $meta.color)
         $keyMap["$idx"] = $key
         $idx++
     }
@@ -881,8 +1053,10 @@ function Remove-ClaudeModel {
     Write-Host "  模型标识 : $modelKey" -ForegroundColor Yellow
     Write-Host "  显示名称 : $($meta.name)" -ForegroundColor Yellow
     Write-Host "  配置目录 : $configDir" -ForegroundColor Yellow
-    if (Test-Path $configDir) {
-        $size = (Get-ChildItem $configDir -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+    if (Test-Path -LiteralPath $configDir) {
+        $size = (Get-ChildItem -LiteralPath $configDir -Recurse -Force -ErrorAction SilentlyContinue |
+            Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
+            Measure-Object -Property Length -Sum).Sum
         Write-Host "  目录大小 : $([math]::Round($size / 1KB, 2)) KB" -ForegroundColor Yellow
     }
 
@@ -897,24 +1071,24 @@ function Remove-ClaudeModel {
     # 执行删除
     try {
         # 1. 删除配置目录（先安全移除所有 Junction/Link，防止跟随删除共享数据）
-        if (Test-Path $configDir) {
+        if (Test-Path -LiteralPath $configDir) {
             # 按名称逐一移除已知链接，避免遗漏嵌套的 ReparsePoint
             $knownLinks = @('conversations','projects','commands','skills')
             foreach ($link in $knownLinks) {
                 $linkPath = Join-Path $configDir $link
-                $item = Get-Item $linkPath -Force -ErrorAction SilentlyContinue
-                if ($item -and $item.Attributes -match "ReparsePoint") {
-                    cmd /c "rmdir `"$linkPath`"" 2>$null
+                $item = Get-Item -LiteralPath $linkPath -Force -ErrorAction SilentlyContinue
+                if ($item -and ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+                    Remove-DirectoryReparsePoint -Path $linkPath
                 }
             }
             # 二次检查：如果仍有 ReparsePoint 残留，中止删除以保护共享数据
-            $remainingReparse = Get-ChildItem $configDir -Force -Recurse -ErrorAction SilentlyContinue |
-                Where-Object { $_.Attributes -match "ReparsePoint" }
+            $remainingReparse = Get-ChildItem -LiteralPath $configDir -Force -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint }
             if ($remainingReparse) {
                 Write-Error "检测到残留的符号链接，中止删除以保护共享数据：$($remainingReparse.FullName -join ', ')"
                 return
             }
-            Remove-Item $configDir -Recurse -Force
+            Remove-Item -LiteralPath $configDir -Recurse -Force
             Write-Host "✅ 已删除配置目录: $configDir" -ForegroundColor Green
         }
         else {
@@ -924,7 +1098,7 @@ function Remove-ClaudeModel {
         # 2. 从注册表移除
         $aliasToRemove = $meta.alias
         $script:Registry.Remove($modelKey)
-        $script:Registry | ConvertTo-Json -Depth 10 | Set-Content $script:RegistryPath
+        Write-JsonFileAtomic -Path $script:RegistryPath -InputObject $script:Registry
         Write-Host "✅ 已从注册表移除" -ForegroundColor Green
 
         # 3. 从 Models 哈希表移除
@@ -975,7 +1149,7 @@ function Repair-ClaudeNotify {
         foreach ($key in $script:Registry.Keys | Sort-Object) {
             $meta = $script:Registry[$key]
             Write-Host "`n----------------------------------------" -ForegroundColor DarkGray
-            Write-Host " 正在配置: $($meta.name) [$key]" -ForegroundColor $meta.color
+            Write-Host " 正在配置: $($meta.name) [$key]" -ForegroundColor (Get-SafeConsoleColor -Color $meta.color)
             Write-Host "----------------------------------------" -ForegroundColor DarkGray
             Set-ClaudeModelSound -ModelKey $key
         }
@@ -990,7 +1164,7 @@ function Repair-ClaudeNotify {
 
     foreach ($key in $script:Registry.Keys | Sort-Object) {
         $configDir = "$env:USERPROFILE\.claude-$key"
-        if (-not (Test-Path $configDir)) {
+        if (-not (Test-Path -LiteralPath $configDir)) {
             Write-Warning "目录不存在，跳过: $configDir"
             continue
         }
@@ -1021,7 +1195,7 @@ function Set-ClaudeModelSound {
         foreach ($k in $script:Registry.Keys | Sort-Object) {
             $meta = $script:Registry[$k]
             $aliasInfo = if ($meta.alias) { " [别名: $($meta.alias)]" } else { "" }
-            Write-Host "  $idx. $($meta.name)$aliasInfo" -ForegroundColor $meta.color
+            Write-Host "  $idx. $($meta.name)$aliasInfo" -ForegroundColor (Get-SafeConsoleColor -Color $meta.color)
             $keyMap["$idx"] = $k
             $idx++
         }
@@ -1063,7 +1237,7 @@ function Set-ClaudeModelSound {
     if ($typeChoice -eq "2") {
         $soundType = "custom"
         $customPath = Read-Host "音频文件绝对路径（如 C:\\Music\\notify.wav）"
-        if (-not (Test-Path $customPath)) {
+        if (-not (Test-Path -LiteralPath $customPath)) {
             Write-Warning "文件不存在，回退到默认音效 Reminder"
             $soundType = "preset"
             $soundValue = "Reminder"
@@ -1119,7 +1293,7 @@ function Set-ClaudeModelSound {
     }
 
     # --- 步骤 4：执行更新 ---
-    if (-not (Test-Path $configDir)) {
+    if (-not (Test-Path -LiteralPath $configDir)) {
         New-Item -ItemType Directory -Force -Path $configDir | Out-Null
     }
     New-ClaudeNotifyScript -ConfigDir $configDir -ModelKey $ModelKey -SoundType $soundType -SoundValue $soundValue
@@ -1158,7 +1332,7 @@ function Test-ModelNotify {
     $configDir = "$env:USERPROFILE\.claude-$ModelKey"
     $notifyPath = Join-Path $configDir "notify.ps1"
 
-    if (-not (Test-Path $notifyPath)) {
+    if (-not (Test-Path -LiteralPath $notifyPath)) {
         Write-Error "通知脚本不存在: $notifyPath。请先为该模型生成通知配置。"
         return
     }
@@ -1173,19 +1347,253 @@ function Test-ModelNotify {
     }
 }
 
-# ---------- 提示 ----------
+# ---------- 公开函数：运行诊断 ----------
 
-if (-not (Get-Module -ListAvailable -Name BurntToast -ErrorAction SilentlyContinue)) {
-    Write-Warning "未检测到 BurntToast 模块，通知功能不可用。安装命令: Install-Module -Name BurntToast -Scope CurrentUser"
+function Test-ClaudeSwitcher {
+    <#
+    全面诊断 Claude Model Switcher 的运行环境，
+    输出带颜色标记的检查报告，方便用户自查和提 issue 时贴出。
+    #>
+    [CmdletBinding()]
+    param()
+
+    $pass = 0
+    $warn = 0
+    $fail = 0
+
+    function _ok  { param($msg) Write-Host "  [PASS] $msg" -ForegroundColor Green; $script:pass++ }
+    function _warn { param($msg) Write-Host "  [WARN] $msg" -ForegroundColor Yellow; $script:warn++ }
+    function _err  { param($msg) Write-Host "  [FAIL] $msg" -ForegroundColor Red; $script:fail++ }
+
+    Write-Host "`nClaude Model Switcher Diagnostics`n=================================" -ForegroundColor Cyan
+
+    # 1. PowerShell 版本
+    Write-Host "`nEnvironment" -ForegroundColor White
+    if ($PSVersionTable.PSVersion.Major -ge 7) {
+        _ok "PowerShell $($PSVersionTable.PSVersion)"
+    } else {
+        _err "PowerShell $($PSVersionTable.PSVersion) — 需要 7+"
+    }
+
+    # 2. Claude CLI
+    $claude = Get-Command claude -ErrorAction SilentlyContinue
+    if ($claude) {
+        _ok "Claude CLI: $($claude.Source)"
+    } else {
+        _warn "Claude CLI not found on PATH"
+    }
+
+    # 3. BurntToast
+    if (Get-Module -ListAvailable -Name BurntToast -ErrorAction SilentlyContinue) {
+        _ok "BurntToast module available"
+    } else {
+        _warn "BurntToast not installed — notifications disabled"
+    }
+
+    # 4. 脚本加载来源
+    Write-Host "`nInstallation" -ForegroundColor White
+    if ($script:InstallDir -and (Test-Path "$script:InstallDir\claude-model-switcher.ps1")) {
+        _ok "Script loaded from: $script:InstallDir"
+    } else {
+        _warn "Script path uncertain (dot-sourced from unknown location)"
+    }
+
+    # 5. $PROFILE 加载状态
+    if (Test-Path $PROFILE) {
+        $profileContent = Get-Content $PROFILE -Raw -ErrorAction SilentlyContinue
+        if ($profileContent -and $profileContent.Contains("claude-model-switcher.ps1")) {
+            _ok "Profile contains loader line"
+        } else {
+            _warn "Profile does not contain loader line (run install.ps1 to persist)"
+        }
+    } else {
+        _warn "`$PROFILE does not exist"
+    }
+
+    # 6. 注册表
+    Write-Host "`nRegistry & Models" -ForegroundColor White
+    if (Test-Path $script:RegistryPath) {
+        try {
+            $reg = Get-Content $script:RegistryPath -Raw | ConvertFrom-Json -ErrorAction Stop | ConvertTo-HashtableDeep
+            _ok "Registry loaded ($($reg.Count) models)"
+
+            foreach ($key in $reg.Keys) {
+                $meta = $reg[$key]
+                Write-Host "    Model '$key' ($($meta.name))" -ForegroundColor Gray
+
+                $modelDir = "$env:USERPROFILE\.claude-$key"
+                if (Test-Path $modelDir) {
+                    # model-specific.json
+                    $msPath = Join-Path $modelDir "model-specific.json"
+                    if (Test-Path $msPath) {
+                        try {
+                            $null = Get-Content $msPath -Raw | ConvertFrom-Json -ErrorAction Stop
+                            _ok "    model-specific.json valid"
+                        } catch {
+                            _err "    model-specific.json parse error"
+                        }
+                    } else {
+                        _warn "    model-specific.json missing"
+                    }
+
+                    # settings.json
+                    if (Test-Path (Join-Path $modelDir "settings.json")) {
+                        _ok "    settings.json exists"
+                    } else {
+                        _warn "    settings.json missing (will be generated on next switch)"
+                    }
+
+                    # Junction links
+                    foreach ($linkName in @("conversations", "projects", "commands", "skills")) {
+                        $linkPath = Join-Path $modelDir $linkName
+                        if (Test-Path $linkPath) {
+                            $item = Get-Item $linkPath -Force
+                            if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                                _ok "    junction '$linkName' OK"
+                            } else {
+                                _err "    junction '$linkName' is a regular directory (expected reparse point)"
+                            }
+                        } else {
+                            _warn "    junction '$linkName' missing"
+                        }
+                    }
+                } else {
+                    _err "    Model directory missing: $modelDir"
+                }
+            }
+        } catch {
+            _err "Registry JSON parse error: $_"
+        }
+    } else {
+        _warn "Registry not found — run Add-ClaudeModel to create one"
+    }
+
+    # 7. 共享目录
+    Write-Host "`nShared Directories" -ForegroundColor White
+    foreach ($dir in @($script:SharedRoot, $script:SharedConv, $script:SharedProjects)) {
+        if (Test-Path $dir) {
+            _ok (Split-Path $dir -Leaf)
+        } else {
+            _warn "Missing: $dir"
+        }
+    }
+
+    # 8. 当前环境
+    Write-Host "`nActive Session" -ForegroundColor White
+    if ($env:CLAUDE_CONFIG_DIR) {
+        _ok "CLAUDE_CONFIG_DIR = $env:CLAUDE_CONFIG_DIR"
+    } else {
+        _warn "CLAUDE_CONFIG_DIR not set (no model currently active)"
+    }
+    _ok "Quiet mode: $(if (Test-ClaudeSwitcherFlag -Name "CLAUDE_SWITCHER_QUIET") { 'ON' } else { 'OFF' })"
+    _ok "Auto-repair: $(if (Test-ClaudeSwitcherFlag -Name "CLAUDE_SWITCHER_AUTO_REPAIR") { 'ON' } else { 'OFF' })"
+
+    # 汇总
+    Write-Host "`n---------------------------------" -ForegroundColor White
+    Write-Host "Results: $pass passed, $warn warnings, $fail errors" -ForegroundColor $(if ($fail -gt 0) { 'Red' } elseif ($warn -gt 0) { 'Yellow' } else { 'Green' })
+    Write-Host ""
 }
 
-Write-Host "Claude Code 多模型切换器已加载" -ForegroundColor Green
-Write-Host "已注册模型: $($script:Registry.Keys -join ', ')" -ForegroundColor Gray
-Write-Host "命令: $(($script:Registry.Values | ForEach-Object { if ($_.alias) { "$($_.alias) ($($_.name))" } else { "$($_.name)" } }) -join ', ')" -ForegroundColor Gray
-Write-Host "添加新模型: 运行 Add-ClaudeModel" -ForegroundColor Cyan
-Write-Host "删除模型: 运行 Remove-ClaudeModel" -ForegroundColor Red
-Write-Host "修复通知脚本: 运行 Repair-ClaudeNotify" -ForegroundColor Cyan
-Write-Host "修改模型音效: 运行 Set-ClaudeModelSound" -ForegroundColor Cyan
-Write-Host "试听通知效果: 运行 Test-ModelNotify" -ForegroundColor Cyan
-Write-Host "修复对话状态: 运行 Repair-ClaudeConversation" -ForegroundColor Cyan
-Write-Host "对话历史共享目录: $script:SharedRoot" -ForegroundColor DarkGray
+# ---------- 公开函数：一键更新 ----------
+
+function Update-ClaudeModelSwitcher {
+    <#
+    检测安装方式（git clone 或 zip 下载）并自动拉取最新代码，
+    更新后自动重载脚本，无需重新打开终端。
+    #>
+    [CmdletBinding()]
+    param()
+
+    Write-Host "`n🔄 正在更新 Claude Model Switcher..." -ForegroundColor Cyan
+
+    $installDir = $script:InstallDir
+    if (-not $installDir -or -not (Test-Path "$installDir\claude-model-switcher.ps1")) {
+        Write-Error "无法定位脚本安装目录。请确保是通过 install.ps1 或 git clone 安装的。"
+        return
+    }
+
+    $isGit = Test-Path "$installDir\.git"
+
+    if ($isGit) {
+        Write-Host "  检测到 Git 安装，执行 git pull..." -ForegroundColor Gray
+        try {
+            $output = git -C $installDir pull origin master 2>&1
+            Write-Host $output -ForegroundColor Gray
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error "git pull 失败 (exit $LASTEXITCODE)"
+                return
+            }
+        } catch {
+            Write-Error "git pull 出错: $_"
+            return
+        }
+    } else {
+        Write-Host "  检测到 Zip 安装，下载最新代码..." -ForegroundColor Gray
+        $zipUrl = "https://github.com/cunninger/claude-model-switcher/archive/refs/heads/master.zip"
+        $zipPath = "$env:TEMP\claude-model-switcher-update.zip"
+
+        try {
+            Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+            Expand-Archive -Path $zipPath -DestinationPath $env:TEMP -Force
+            $extracted = "$env:TEMP\claude-model-switcher-master"
+
+            # 保留用户数据（注册表和模型目录都在外部）
+            Remove-Item -Recurse -Force $installDir
+            Move-Item -Path $extracted -Destination $installDir -Force
+            Remove-Item $zipPath -ErrorAction SilentlyContinue
+            Write-Success "  Zip 更新完成"
+        } catch {
+            Write-Error "下载/解压失败: $_"
+            return
+        }
+    }
+
+    # 重载脚本
+    Write-Host "  重新加载脚本..." -ForegroundColor Gray
+    try {
+        . "$installDir\claude-model-switcher.ps1"
+        Write-Host "`n✅ 更新完成！当前版本: $script:ClaudeSwitcherVersion" -ForegroundColor Green
+        Write-Host "  建议运行 Repair-ClaudeNotify 刷新通知脚本。" -ForegroundColor Cyan
+    } catch {
+        Write-Error "重载失败: $_"
+    }
+}
+
+# ---------- 公开函数：快速状态 ----------
+
+function Get-ClaudeSwitcherStatus {
+    <#
+    打印一行简洁状态，供日常快速查看。
+    #>
+    [CmdletBinding()]
+    param()
+
+    $modelCount = if ($script:Registry) { $script:Registry.Count } else { 0 }
+    $activeModel = if ($env:CLAUDE_CONFIG_DIR) {
+        if ($env:CLAUDE_CONFIG_DIR -match '\\\.claude-([^\\]+)$') { $matches[1] } else { "?" }
+    } else { "none" }
+
+    Write-Host "Claude Switcher v$script:ClaudeSwitcherVersion | Models: $modelCount | Active: $activeModel" -ForegroundColor Cyan
+}
+
+# ---------- 提示 ----------
+
+if (-not (Test-ClaudeSwitcherFlag -Name "CLAUDE_SWITCHER_QUIET")) {
+    if (-not (Get-Module -ListAvailable -Name BurntToast -ErrorAction SilentlyContinue)) {
+        Write-Warning "未检测到 BurntToast 模块，通知功能不可用。安装命令: Install-Module -Name BurntToast -Scope CurrentUser"
+    }
+
+    Write-Host "Claude Code 多模型切换器已加载" -ForegroundColor Green
+    Write-Host "已注册模型: $($script:Registry.Keys -join ', ')" -ForegroundColor Gray
+    Write-Host "命令: $(($script:Registry.Values | ForEach-Object { if ($_.alias) { "$($_.alias) ($($_.name))" } else { "$($_.name)" } }) -join ', ')" -ForegroundColor Gray
+    Write-Host "添加新模型: 运行 Add-ClaudeModel" -ForegroundColor Cyan
+    Write-Host "删除模型: 运行 Remove-ClaudeModel" -ForegroundColor Red
+    Write-Host "修复通知脚本: 运行 Repair-ClaudeNotify" -ForegroundColor Cyan
+    Write-Host "修改模型音效: 运行 Set-ClaudeModelSound" -ForegroundColor Cyan
+    Write-Host "试听通知效果: 运行 Test-ModelNotify" -ForegroundColor Cyan
+    Write-Host "修复对话状态: 运行 Repair-ClaudeConversation" -ForegroundColor Cyan
+    Write-Host "运行诊断: 运行 Test-ClaudeSwitcher" -ForegroundColor Cyan
+    Write-Host "检查更新: 运行 Update-ClaudeModelSwitcher" -ForegroundColor Cyan
+    Write-Host "自动修复对话: 设置 CLAUDE_SWITCHER_AUTO_REPAIR=1 后切换模型时启用" -ForegroundColor DarkGray
+    Write-Host "对话历史共享目录: $script:SharedRoot" -ForegroundColor DarkGray
+}

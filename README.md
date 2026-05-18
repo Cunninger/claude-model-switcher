@@ -49,6 +49,25 @@
 
 ## 快速开始
 
+**推荐：一键自动安装**（复制以下两行命令到 PowerShell 7+ 终端执行）
+
+```powershell
+iwr https://raw.githubusercontent.com/cunninger/claude-model-switcher/master/install.ps1 -OutFile install.ps1
+pwsh -File .\install.ps1
+```
+
+安装完成后，运行 `Add-ClaudeModel` 添加你的第一个 AI 模型：
+
+```powershell
+Add-ClaudeModel
+# 然后输入模型标识，例如 deepseek，别名 d
+deepseek    # 启动对应模型
+d           # 或快捷别名
+```
+
+<details>
+<summary>💡 手动安装（开发者/自定义路径）</summary>
+
 ```powershell
 # 1. 克隆仓库
 git clone https://github.com/cunninger/claude-model-switcher.git
@@ -57,21 +76,7 @@ cd claude-model-switcher
 # 2. 加载脚本（dot-source）
 . ./claude-model-switcher.ps1
 
-# 3. 添加第一个模型（交互式向导）
-Add-ClaudeModel
-
-# 4. 启动！
-deepseek    # 输入模型标识
-d           # 或快捷别名
-```
-
-<details>
-<summary>💡 持久化加载（推荐）</summary>
-
-将以下行添加到 PowerShell Profile，每次启动终端自动加载：
-
-```powershell
-# $PROFILE
+# 3. 持久化：将以下行添加到 $PROFILE
 . "D:\你的路径\claude-model-switcher.ps1"
 ```
 
@@ -228,6 +233,9 @@ Repair-ClaudeNotify
 | `Set-ClaudeModelSound` | 修改指定模型的通知音效 | 可选 |
 | `Test-ModelNotify` | 试听通知效果 | 调试 |
 | `Repair-ClaudeConversation` | 修复对话中未完成的 tool call | 排错 |
+| `Test-ClaudeSwitcher` | 运行全面诊断，检查环境与配置 | 排错 |
+| `Update-ClaudeModelSwitcher` | 一键更新到最新版本 | 升级后 |
+| `Get-ClaudeSwitcherStatus` | 查看当前状态（模型数/活跃模型） | 日常 |
 
 ---
 
@@ -380,6 +388,25 @@ Install-Module -Name BurntToast -Scope CurrentUser -Force
 
 ## Quick Start
 
+**Recommended: One-line install** (copy and run in PowerShell 7+)
+
+```powershell
+iwr https://raw.githubusercontent.com/cunninger/claude-model-switcher/master/install.ps1 -OutFile install.ps1
+pwsh -File .\install.ps1
+```
+
+After installation, run `Add-ClaudeModel` to configure your first AI model:
+
+```powershell
+Add-ClaudeModel
+# Then type your model identifier, e.g. deepseek, alias d
+deepseek    # Launch the model
+d           # Or use the alias
+```
+
+<details>
+<summary>💡 Manual Installation (Developers / Custom Path)</summary>
+
 ```powershell
 # 1. Clone
 git clone https://github.com/cunninger/claude-model-switcher.git
@@ -388,21 +415,7 @@ cd claude-model-switcher
 # 2. Load the script (dot-source)
 . ./claude-model-switcher.ps1
 
-# 3. Add your first model (interactive wizard)
-Add-ClaudeModel
-
-# 4. Launch!
-deepseek    # model identifier
-d           # or alias
-```
-
-<details>
-<summary>💡 Persist Across Sessions (Recommended)</summary>
-
-Add to your PowerShell `$PROFILE` for auto-loading:
-
-```powershell
-# $PROFILE
+# 3. Persist: add to $PROFILE
 . "C:\path\to\claude-model-switcher.ps1"
 ```
 
@@ -558,6 +571,9 @@ Repair-ClaudeNotify
 | `Set-ClaudeModelSound` | Change notification sound for a specific model | Optional |
 | `Test-ModelNotify` | Preview notification effect | Debugging |
 | `Repair-ClaudeConversation` | Fix incomplete tool calls in conversation history | Troubleshooting |
+| `Test-ClaudeSwitcher` | Run full diagnostics on environment and config | Troubleshooting |
+| `Update-ClaudeModelSwitcher` | One-click update to the latest version | After upgrade |
+| `Get-ClaudeSwitcherStatus` | Show current status (model count / active model) | Daily |
 
 ---
 
