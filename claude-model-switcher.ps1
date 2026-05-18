@@ -2032,6 +2032,7 @@ if ($bannerLevel -eq "full") {
     Write-Host "检查更新: 运行 Update-ClaudeModelSwitcher" -ForegroundColor Cyan
     Write-Host "自动修复对话: 设置 CLAUDE_SWITCHER_AUTO_REPAIR=1 后切换模型时启用" -ForegroundColor DarkGray
     Write-Host "对话历史共享目录: $script:SharedRoot" -ForegroundColor DarkGray
+    Write-Host "切换启动提示: `$env:CLAUDE_SWITCHER_BANNER = `"brief`"/`"full`"/`"none`"" -ForegroundColor DarkGray
 }
 elseif ($bannerLevel -eq "brief") {
     $modelCount = if ($script:Registry) { $script:Registry.Count } else { 0 }
@@ -2041,5 +2042,6 @@ elseif ($bannerLevel -eq "brief") {
         if ($meta.alias) { "$($_) ($($meta.alias))" } else { $_ }
     }) -join ", "
     Write-Host "Claude Switcher v$script:ClaudeSwitcherVersion | Models: $modelCount ($aliases) | Active: $activeModel" -ForegroundColor Cyan
+    Write-Host "提示: `$env:CLAUDE_SWITCHER_BANNER = `"full`" 显示更多 | `"none`" 静默" -ForegroundColor DarkGray
 }
 # "none" = silent, do nothing
