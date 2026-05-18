@@ -37,6 +37,7 @@
 - [前置依赖](#前置依赖)
 - [安装](#安装)
 - [使用指南](#使用指南)
+- [自定义启动提示](#自定义启动提示)
 - [架构原理](#架构原理)
 - [命令列表](#命令列表)
 - [配置说明](#配置说明)
@@ -95,6 +96,7 @@ cd claude-model-switcher
 | 🛡️ **跨模型 Resume 安全** | 可选修复未完成的 tool call，避免切换模型后 400 错误 |
 | 🔔 **Windows Toast 通知** | 任务完成时弹出通知 + 音效提醒 |
 | 📝 **动态注册** | 添加/删除模型后立即生效，无需重新加载脚本 |
+| 🎚️ **三级启动提示** | `brief`（一行）/ `full`（完整）/ `none`（静默），一行命令随时切换 |
 
 ---
 
@@ -166,6 +168,31 @@ Remove-ClaudeModel
 ```powershell
 Repair-ClaudeNotify
 ```
+
+### 自定义启动提示
+
+脚本支持三级启动提示，打开新终端时显示不同信息量：
+
+| 模式 | 说明 |
+|------|------|
+| `full` | 完整横幅 + 模型列表 + 状态信息（默认） |
+| `brief` | 仅一行状态摘要 |
+| `none` | 完全静默，无任何输出 |
+
+**切换方式**（在 PowerShell 中执行，新开终端生效）：
+
+```powershell
+# 切换到完整提示
+Set-ClaudeSwitcherProfileLoader -Banner "full"
+
+# 切换到一行摘要
+Set-ClaudeSwitcherProfileLoader -Banner "brief"
+
+# 关闭启动提示
+Set-ClaudeSwitcherProfileLoader -Banner "none"
+```
+
+> `brief` 模式的启动提示中会附带切换命令，方便随时复制调整。
 
 ---
 
@@ -417,6 +444,7 @@ cd claude-model-switcher
 | 🛡️ **Safe cross-model resume** | Optionally repairs incomplete tool calls to prevent API 400 errors |
 | 🔔 **Windows Toast notifications** | Desktop notification + sound when Claude finishes |
 | 📝 **Dynamic registration** | Added/removed models take effect immediately |
+| 🎚️ **Three-level startup banner** | `brief` (one-line) / `full` (complete) / `none` (silent) — switch with a single command |
 
 ---
 
@@ -488,6 +516,31 @@ After updating the script, batch-repair notification scripts for all configured 
 ```powershell
 Repair-ClaudeNotify
 ```
+
+### Customize Startup Banner
+
+The script supports three banner levels that control what information is displayed when you open a new terminal:
+
+| Mode | Description |
+|------|-------------|
+| `full` | Full banner + model list + status info (default) |
+| `brief` | Single-line status summary |
+| `none` | Completely silent, no output |
+
+**Switching** (run in PowerShell, takes effect in new terminals):
+
+```powershell
+# Full banner
+Set-ClaudeSwitcherProfileLoader -Banner "full"
+
+# One-line summary
+Set-ClaudeSwitcherProfileLoader -Banner "brief"
+
+# Silent mode
+Set-ClaudeSwitcherProfileLoader -Banner "none"
+```
+
+> In `brief` mode, the startup line includes the switching command so you can copy it at any time.
 
 ---
 
