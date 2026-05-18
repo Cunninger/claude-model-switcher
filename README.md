@@ -170,50 +170,8 @@ Repair-ClaudeNotify
 ---
 
 ## 架构原理
+<img width="1056" height="843" alt="image" src="https://github.com/user-attachments/assets/71a51dc6-78c4-49df-8eb8-9ee54b7e2386" />
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     PowerShell 会话                          │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │              claude-model-switcher.ps1               │   │
-│  │  · 动态注册模型命令 (deepseek, d, qwen, q ...)       │   │
-│  │  · 配置合并引擎                                       │   │
-│  │  · Junction 链接管理                                  │   │
-│  │  · Tool call 修复器                                   │   │
-│  └─────────────────────────────────────────────────────┘   │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-           ┌───────────────┼───────────────┐
-           ▼               ▼               ▼
-    ┌────────────┐  ┌────────────┐  ┌────────────┐
-    │ ~/.claude- │  │ ~/.claude- │  │ ~/.claude- │
-    │ deepseek/  │  │   qwen/    │  │   gpt4o/   │
-    │            │  │            │  │            │
-    │ settings.  │  │ settings.  │  │ settings.  │
-    │ json       │  │ json       │  │ json       │
-    │ (合并生成)  │  │ (合并生成)  │  │ (合并生成)  │
-    │            │  │            │  │            │
-    │ model-     │  │ model-     │  │ model-     │
-    │ specific.  │  │ specific.  │  │ specific.  │
-    │ json       │  │ json       │  │ json       │
-    │ (用户配置)  │  │ (用户配置)  │  │ (用户配置)  │
-    └─────┬──────┘  └─────┬──────┘  └─────┬──────┘
-          │               │               │
-          └───────────────┼───────────────┘
-                          │ Junction / SymbolicLink
-                          ▼
-           ┌──────────────────────────────┐
-           │      ~/.claude-shared/        │
-           │  ┌────────────────────────┐  │
-           │  │    conversations/      │  │  ← 所有模型共享
-           │  │    (对话历史)           │  │
-           │  └────────────────────────┘  │
-           │  ┌────────────────────────┐  │
-           │  │      projects/         │  │  ← 所有模型共享
-           │  └────────────────────────┘  │
-           │         ...                  │
-           └──────────────────────────────┘
-```
 
 **核心设计**：
 
@@ -509,49 +467,8 @@ Repair-ClaudeNotify
 ---
 
 ## Architecture
+<img width="1056" height="843" alt="image" src="https://github.com/user-attachments/assets/d50c70c7-1c67-4c87-8d7e-aafa8db57c4b" />
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     PowerShell Session                       │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │              claude-model-switcher.ps1               │   │
-│  │  · Dynamic model command registration               │   │
-│  │  · Config merge engine                              │   │
-│  │  · Junction link management                         │   │
-│  │  · Tool call repairer                               │   │
-│  └─────────────────────────────────────────────────────┘   │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-           ┌───────────────┼───────────────┐
-           ▼               ▼               ▼
-    ┌────────────┐  ┌────────────┐  ┌────────────┐
-    │ ~/.claude- │  │ ~/.claude- │  │ ~/.claude- │
-    │ deepseek/  │  │   qwen/    │  │   gpt4o/   │
-    │            │  │            │  │            │
-    │ settings.  │  │ settings.  │  │ settings.  │
-    │ json       │  │ json       │  │ json       │
-    │ (merged)   │  │ (merged)   │  │ (merged)   │
-    │            │  │            │  │            │
-    │ model-     │  │ model-     │  │ model-     │
-    │ specific.  │  │ specific.  │  │ specific.  │
-    │ json       │  │ json       │  │ json       │
-    │ (user)     │  │ (user)     │  │ (user)     │
-    └─────┬──────┘  └─────┬──────┘  └─────┬──────┘
-          │               │               │
-          └───────────────┼───────────────┘
-                          │ Junction / SymbolicLink
-                          ▼
-           ┌──────────────────────────────┐
-           │      ~/.claude-shared/        │
-           │  ┌────────────────────────┐  │
-           │  │    conversations/      │  │  ← shared across models
-           │  └────────────────────────┘  │
-           │  ┌────────────────────────┐  │
-           │  │      projects/         │  │  ← shared across models
-           │  └────────────────────────┘  │
-           │         ...                  │
-           └──────────────────────────────┘
-```
 
 **Design Principles**:
 
