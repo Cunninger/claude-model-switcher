@@ -94,12 +94,14 @@ function Install-StagedDirectory {
 function Set-ProfileLoaderBlock {
     param(
         [Parameter(Mandatory)][string]$ProfilePath,
-        [Parameter(Mandatory)][string]$ScriptPath
+        [Parameter(Mandatory)][string]$ScriptPath,
+        [ValidateSet("full", "brief", "none")]
+        [string]$Banner = "brief"
     )
 
     $block = @"
 $ProfileMarkerBegin
-`$env:CLAUDE_SWITCHER_QUIET = "1"
+`$env:CLAUDE_SWITCHER_BANNER = "$Banner"
 . "$ScriptPath"
 $ProfileMarkerEnd
 "@
@@ -117,7 +119,7 @@ $ProfileMarkerEnd
 
     $lines = @($content -split "\r?\n") | Where-Object {
         $_ -notmatch 'claude-model-switcher\.ps1' -and
-        $_ -notmatch '^\s*\$env:CLAUDE_SWITCHER_QUIET\s*=' -and
+        $_ -notmatch '^\s*\$env:CLAUDE_SWITCHER_(QUIET|BANNER)\s*=' -and
         $_ -ne '# Claude Code Multi-Model Switcher'
     }
     $content = ($lines -join "`n").TrimEnd()

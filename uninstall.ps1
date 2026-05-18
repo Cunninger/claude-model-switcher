@@ -19,8 +19,6 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ProfileMarkerBegin = "# >>> Claude Code Multi-Model Switcher >>>"
-$ProfileMarkerEnd   = "# <<< Claude Code Multi-Model Switcher <<<"
 
 # ---------- 颜色工具 ----------
 function Write-Info    { param([string]$Message) Write-Host "  $Message" -ForegroundColor Cyan }
@@ -28,36 +26,15 @@ function Write-Success { param([string]$Message) Write-Host "  $Message" -Foregr
 function Write-Warn    { param([string]$Message) Write-Host "  $Message" -ForegroundColor Yellow }
 function Write-Error   { param([string]$Message) Write-Host "  $Message" -ForegroundColor Red }
 
-function Remove-ProfileLoaderBlock {
-    param([Parameter(Mandatory)][string]$ProfilePath)
-
-    if (-not (Test-Path -LiteralPath $ProfilePath)) {
-        Write-Warn "`$PROFILE does not exist"
-        return
-    }
-
-    $content = Get-Content -LiteralPath $ProfilePath -Raw -ErrorAction SilentlyContinue
-    if ($null -eq $content) { $content = "" }
-    $original = $content
-
-    $pattern = "(?s)\r?\n?$([regex]::Escape($ProfileMarkerBegin)).*?$([regex]::Escape($ProfileMarkerEnd))\r?\n?"
-    $content = [regex]::Replace($content, $pattern, "`n")
-
-    $lines = @($content -split "\r?\n") | Where-Object {
-        $_ -notmatch 'claude-model-switcher\.ps1' -and
-        $_ -notmatch '^\s*\$env:CLAUDE_SWITCHER_QUIET\s*=' -and
-        $_ -ne '# Claude Code Multi-Model Switcher'
-    }
-    $content = ($lines -join "`n").TrimEnd()
-    if ($content) { $content = "$content`n" }
-
-    if ($content -ne $original) {
-        Set-Content -LiteralPath $ProfilePath -Value $content -NoNewline -Encoding UTF8
-        Write-Success "Removed loader from `$PROFILE"
-    } else {
-        Write-Warn "No claude-model-switcher loader found in `$PROFILE"
-    }
+$profileHelperPath = if ($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot "profile-loader.ps1"))) {
+    Join-Path $PSScriptRoot "profile-loader.ps1"
+} else {
+    Join-Path $InstallDir "profile-loader.ps1"
 }
+if (-not (Test-Path -LiteralPath $profileHelperPath)) {
+    throw "Missing profile helper: $profileHelperPath"
+}
+. $profileHelperPath
 
 function Get-RegisteredModelDataPaths {
     $sharedRoot = "$env:USERPROFILE\.claude-shared"
@@ -114,7 +91,18 @@ Write-Host ""
 
 # ---------- 1. 从 $PROFILE 移除 ----------
 Write-Info "Checking PowerShell profile..."
-Remove-ProfileLoaderBlock -ProfilePath $PROFILE
+$profileResult = Remove-ClaudeSwitcherProfileLoader -ProfilePath $PROFILE
+if (-not $profileResult.Exists) {
+    Write-Warn "`$PROFILE does not exist"
+}
+elseif ($profileResult.Warning) {
+    Write-Warn $profileResult.Warning
+}
+if ($profileResult.Changed) {
+    Write-Success "Removed loader from `$PROFILE"
+} else {
+    Write-Warn "No claude-model-switcher loader found in `$PROFILE"
+}
 
 # ---------- 2. 删除脚本文件 ----------
 $removeScript = $true

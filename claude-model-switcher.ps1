@@ -19,6 +19,14 @@ $script:SharedConv            = "$script:SharedRoot\conversations"
 $script:SharedProjects        = "$script:SharedRoot\projects"
 $script:RegistryPath          = "$script:SharedRoot\models-registry.json"
 
+$script:ProfileHelperPath = Join-Path $script:InstallDir "profile-loader.ps1"
+if (Test-Path -LiteralPath $script:ProfileHelperPath) {
+    . $script:ProfileHelperPath
+}
+else {
+    throw "Missing profile helper: $script:ProfileHelperPath"
+}
+
 # ---------- 内部工具函数 ----------
 
 function ConvertTo-HashtableDeep {
@@ -134,48 +142,6 @@ function Test-ClaudeSwitcherFlag {
     return $value -match '^(1|true|yes|on)$'
 }
 
-function Get-ClaudeSwitcherProfileBlock {
-    param([Parameter(Mandatory)][string]$ScriptPath)
-
-    return @"
-# >>> Claude Code Multi-Model Switcher >>>
-`$env:CLAUDE_SWITCHER_QUIET = "1"
-. "$ScriptPath"
-# <<< Claude Code Multi-Model Switcher <<<
-"@
-}
-
-function Set-ClaudeSwitcherProfileLoader {
-    param(
-        [Parameter(Mandatory)][string]$ProfilePath,
-        [Parameter(Mandatory)][string]$ScriptPath
-    )
-
-    $markerBegin = "# >>> Claude Code Multi-Model Switcher >>>"
-    $markerEnd = "# <<< Claude Code Multi-Model Switcher <<<"
-    $block = Get-ClaudeSwitcherProfileBlock -ScriptPath $ScriptPath
-
-    if (-not (Test-Path -LiteralPath $ProfilePath)) {
-        New-Item -Path $ProfilePath -ItemType File -Force | Out-Null
-    }
-
-    $content = Get-Content -LiteralPath $ProfilePath -Raw -ErrorAction SilentlyContinue
-    if ($null -eq $content) { $content = "" }
-
-    $pattern = "(?s)\r?\n?$([regex]::Escape($markerBegin)).*?$([regex]::Escape($markerEnd))\r?\n?"
-    $content = [regex]::Replace($content, $pattern, "`n")
-
-    $lines = @($content -split "\r?\n") | Where-Object {
-        $_ -notmatch 'claude-model-switcher\.ps1' -and
-        $_ -notmatch '^\s*\$env:CLAUDE_SWITCHER_QUIET\s*=' -and
-        $_ -ne '# Claude Code Multi-Model Switcher'
-    }
-    $content = ($lines -join "`n").TrimEnd()
-
-    $newContent = if ($content) { "$content`n`n$block`n" } else { "$block`n" }
-    Set-Content -LiteralPath $ProfilePath -Value $newContent -NoNewline -Encoding UTF8
-}
-
 function Get-ClaudeProjectConversationDirectory {
     param([string]$ProjectDir = $PWD)
 
@@ -216,8 +182,10 @@ function Move-StagedDirectoryIntoPlace {
         [Parameter(Mandatory)][string]$DestinationDir
     )
 
-    if (-not (Test-Path -LiteralPath (Join-Path $StagingDir "claude-model-switcher.ps1"))) {
-        throw "更新包无效：缺少 claude-model-switcher.ps1"
+    foreach ($requiredFile in @("claude-model-switcher.ps1", "profile-loader.ps1")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $StagingDir $requiredFile))) {
+            throw "更新包无效：缺少 $requiredFile"
+        }
     }
 
     $currentDir = (Get-Location).ProviderPath
@@ -1576,7 +1544,11 @@ function Test-ClaudeSwitcher {
     } else {
         _warn "CLAUDE_CONFIG_DIR not set (no model currently active)"
     }
-    _ok "Quiet mode: $(if (Test-ClaudeSwitcherFlag -Name "CLAUDE_SWITCHER_QUIET") { 'ON' } else { 'OFF' })"
+    $bannerVal = if (Test-ClaudeSwitcherFlag -Name "CLAUDE_SWITCHER_QUIET") { "none (QUIET=1)" } else {
+        $raw = [Environment]::GetEnvironmentVariable("CLAUDE_SWITCHER_BANNER", "Process")
+        if ($raw -and $raw -in @("full", "brief", "none")) { $raw } else { "full (default)" }
+    }
+    _ok "Banner level: $bannerVal"
     _ok "Auto-repair: $(if (Test-ClaudeSwitcherFlag -Name "CLAUDE_SWITCHER_AUTO_REPAIR") { 'ON' } else { 'OFF' })"
 
     # 汇总
@@ -1621,10 +1593,27 @@ function Repair-ClaudeSwitcher {
     $scriptPath = Join-Path $script:InstallDir "claude-model-switcher.ps1"
     _step "Checking profile loader"
     if (Test-Path -LiteralPath $scriptPath) {
-        if (-not $DryRun) {
-            Set-ClaudeSwitcherProfileLoader -ProfilePath $PROFILE -ScriptPath $scriptPath
+        # Detect current banner level from profile
+        $currentBanner = "brief"
+        if (Test-Path -LiteralPath $PROFILE) {
+            $profileText = Get-Content -LiteralPath $PROFILE -Raw -ErrorAction SilentlyContinue
+            if ($profileText -match 'CLAUDE_SWITCHER_BANNER\s*=\s*"([^"]+)"') {
+                $currentBanner = $matches[1]
+            }
+            elseif ($profileText -match 'CLAUDE_SWITCHER_QUIET\s*=\s*"(?:1|true|yes|on)"') {
+                $currentBanner = "none"
+            }
         }
-        _ok "Profile loader points to: $scriptPath"
+        if ($DryRun) {
+            _warn "Would update profile loader (banner=$currentBanner): $scriptPath"
+        }
+        else {
+            $profileResult = Set-ClaudeSwitcherProfileLoader -ProfilePath $PROFILE -ScriptPath $scriptPath -Banner $currentBanner
+            if ($profileResult.Warning) {
+                _warn $profileResult.Warning
+            }
+            _ok "Profile loader points to: $scriptPath"
+        }
     }
     else {
         _warn "Cannot repair profile loader because script path is uncertain: $scriptPath"
@@ -1702,13 +1691,23 @@ function Repair-ClaudeSwitcher {
             }
         }
 
-        if (-not $DryRun) {
-            New-DirectoryLink -LinkPath (Join-Path $configDir "conversations") -TargetPath $script:SharedConv
-            New-DirectoryLink -LinkPath (Join-Path $configDir "projects") -TargetPath $script:SharedProjects
-            New-DirectoryLink -LinkPath (Join-Path $configDir "commands") -TargetPath $baseCommandsDir
-            New-DirectoryLink -LinkPath (Join-Path $configDir "skills") -TargetPath $baseSkillsDir
+        $sharedLinks = @(
+            @{ Link = Join-Path $configDir "conversations"; Target = $script:SharedConv },
+            @{ Link = Join-Path $configDir "projects"; Target = $script:SharedProjects },
+            @{ Link = Join-Path $configDir "commands"; Target = $baseCommandsDir },
+            @{ Link = Join-Path $configDir "skills"; Target = $baseSkillsDir }
+        )
+        if ($DryRun) {
+            foreach ($link in $sharedLinks) {
+                _warn "Would ensure link: $($link.Link) -> $($link.Target)"
+            }
         }
-        _ok "Shared links checked"
+        else {
+            foreach ($link in $sharedLinks) {
+                New-DirectoryLink -LinkPath $link.Link -TargetPath $link.Target
+            }
+            _ok "Shared links checked"
+        }
 
         $needsNotifyRepair = -not (Test-Path -LiteralPath $notifyPath)
         if (-not $needsNotifyRepair -and (Test-Path -LiteralPath $modelSpecificPath)) {
@@ -1722,11 +1721,15 @@ function Repair-ClaudeSwitcher {
         }
 
         if ($needsNotifyRepair) {
-            _warn "Notification hook missing; regenerating"
-            if (-not $DryRun) {
+            if ($DryRun) {
+                _warn "Would regenerate notification hook: $notifyPath"
+            }
+            else {
+                _warn "Notification hook missing; regenerating"
                 $soundType = if ($meta.sound -and $meta.sound.type) { $meta.sound.type } else { "preset" }
                 $soundValue = if ($meta.sound -and $meta.sound.value) { $meta.sound.value } else { "Reminder" }
                 New-ClaudeNotifyScript -ConfigDir $configDir -ModelKey $key -SoundType $soundType -SoundValue $soundValue
+                _ok "Notification hook regenerated"
             }
         }
         else {
@@ -1792,7 +1795,10 @@ function Test-ClaudeConversation {
     $parseErrors = [System.Collections.Generic.List[int]]::new()
     for ($i = 0; $i -lt $lines.Count; $i++) {
         try {
-            $events.Add(($lines[$i] | ConvertFrom-Json -ErrorAction Stop))
+            $events.Add([pscustomobject]@{
+                Line = $i + 1
+                Event = ($lines[$i] | ConvertFrom-Json -ErrorAction Stop)
+            })
         }
         catch {
             $parseErrors.Add($i + 1)
@@ -1801,13 +1807,20 @@ function Test-ClaudeConversation {
 
     if ($parseErrors.Count -gt 0) {
         _err "JSON parse errors at lines: $($parseErrors -join ', ')"
-        return
+        if ($events.Count -eq 0) {
+            _warn "No parseable events remain for structural checks"
+            return
+        }
+        _warn "Continuing with $($events.Count) parseable events"
     }
-    _ok "All events parse as JSON"
+    else {
+        _ok "All events parse as JSON"
+    }
 
     $uuidSet = @{}
     $duplicateUuid = 0
-    foreach ($ev in $events) {
+    foreach ($record in $events) {
+        $ev = $record.Event
         if ($ev.uuid) {
             if ($uuidSet.ContainsKey($ev.uuid)) { $duplicateUuid++ }
             $uuidSet[$ev.uuid] = $true
@@ -1821,7 +1834,8 @@ function Test-ClaudeConversation {
     }
 
     $brokenParents = 0
-    foreach ($ev in $events) {
+    foreach ($record in $events) {
+        $ev = $record.Event
         if ($ev.parentUuid -and -not $uuidSet.ContainsKey($ev.parentUuid)) {
             $brokenParents++
         }
@@ -1840,14 +1854,26 @@ function Test-ClaudeConversation {
     $missingThinkingSignature = 0
 
     for ($i = 0; $i -lt $events.Count; $i++) {
-        $ev = $events[$i]
+        $record = $events[$i]
+        $ev = $record.Event
         $content = $ev.message.content
         if (-not $content -or $content -is [string]) { continue }
 
-        foreach ($block in $content) {
+        if ($content -is [array]) {
+            $blocks = @($content)
+        }
+        elseif ($content -is [PSCustomObject]) {
+            $blocks = @($content)
+        }
+        else {
+            _warn "Skipping unsupported message.content type at line $($record.Line): $($content.GetType().FullName)"
+            continue
+        }
+
+        foreach ($block in $blocks) {
             if ($block.type -eq "tool_use" -and $block.id) {
                 $pending[$block.id] = @{
-                    Line = $i + 1
+                    Line = $record.Line
                     Name = $block.name
                 }
             }
@@ -1979,7 +2005,14 @@ function Get-ClaudeSwitcherStatus {
 
 # ---------- 提示 ----------
 
-if (-not (Test-ClaudeSwitcherFlag -Name "CLAUDE_SWITCHER_QUIET")) {
+$bannerLevel = if (Test-ClaudeSwitcherFlag -Name "CLAUDE_SWITCHER_QUIET") {
+    "none"
+} else {
+    $raw = [Environment]::GetEnvironmentVariable("CLAUDE_SWITCHER_BANNER", "Process")
+    if ($raw -and $raw -in @("full", "brief", "none")) { $raw } else { "full" }
+}
+
+if ($bannerLevel -eq "full") {
     if (-not (Get-Module -ListAvailable -Name BurntToast -ErrorAction SilentlyContinue)) {
         Write-Warning "未检测到 BurntToast 模块，通知功能不可用。安装命令: Install-Module -Name BurntToast -Scope CurrentUser"
     }
@@ -2000,3 +2033,13 @@ if (-not (Test-ClaudeSwitcherFlag -Name "CLAUDE_SWITCHER_QUIET")) {
     Write-Host "自动修复对话: 设置 CLAUDE_SWITCHER_AUTO_REPAIR=1 后切换模型时启用" -ForegroundColor DarkGray
     Write-Host "对话历史共享目录: $script:SharedRoot" -ForegroundColor DarkGray
 }
+elseif ($bannerLevel -eq "brief") {
+    $modelCount = if ($script:Registry) { $script:Registry.Count } else { 0 }
+    $activeModel = if ($env:CLAUDE_CONFIG_DIR -and $env:CLAUDE_CONFIG_DIR -match '\\\.claude-([^\\]+)$') { $matches[1] } else { "none" }
+    $aliases = ($script:Registry.Keys | Sort-Object | ForEach-Object {
+        $meta = $script:Registry[$_]
+        if ($meta.alias) { "$($_) ($($meta.alias))" } else { $_ }
+    }) -join ", "
+    Write-Host "Claude Switcher v$script:ClaudeSwitcherVersion | Models: $modelCount ($aliases) | Active: $activeModel" -ForegroundColor Cyan
+}
+# "none" = silent, do nothing
