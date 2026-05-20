@@ -2019,7 +2019,7 @@ if ($bannerLevel -eq "full") {
 
     Write-Host "Claude Code 多模型切换器已加载" -ForegroundColor Green
     Write-Host "已注册模型: $($script:Registry.Keys -join ', ')" -ForegroundColor Gray
-    Write-Host "命令: $(($script:Registry.Values | ForEach-Object { if ($_.alias) { "$($_.alias) ($($_.name))" } else { "$($_.name)" } }) -join ', ')" -ForegroundColor Gray
+    Write-Host "命令: $(($script:Registry.GetEnumerator() | ForEach-Object { if ($_.Value.alias) { "$($_.Value.alias) ($($_.Key))" } else { $_.Key } }) -join ', ')" -ForegroundColor Gray
     Write-Host "添加新模型: 运行 Add-ClaudeModel" -ForegroundColor Cyan
     Write-Host "删除模型: 运行 Remove-ClaudeModel" -ForegroundColor Red
     Write-Host "修复通知脚本: 运行 Repair-ClaudeNotify" -ForegroundColor Cyan
