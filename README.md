@@ -212,6 +212,7 @@ Set-ClaudeSwitcherProfileLoader -Banner "none"
 |------|------|----------|
 | `Add-ClaudeModel` | 交互式添加新模型 | ⭐ 常用 |
 | `Remove-ClaudeModel` | 交互式删除模型 | 偶尔 |
+| `Set-ClaudeModel` | 交互式修改模型配置（名称/颜色/别名/API/音效） | 偶尔 |
 | `Repair-ClaudeNotify` | 批量修复/更新所有模型的通知脚本 | 升级后 |
 | `Set-ClaudeModelSound` | 修改指定模型的通知音效 | 可选 |
 | `Test-ModelNotify` | 试听通知效果 | 调试 |
@@ -562,6 +563,7 @@ Set-ClaudeSwitcherProfileLoader -Banner "none"
 |---------|-------------|-----------|
 | `Add-ClaudeModel` | Add a new model (interactive wizard) | ⭐ Daily |
 | `Remove-ClaudeModel` | Remove a model (interactive, with confirmation) | Occasional |
+| `Set-ClaudeModel` | Edit model config interactively (name/color/alias/API/sound) | Occasional |
 | `Repair-ClaudeNotify` | Batch repair/update notification scripts for all models | After upgrade |
 | `Set-ClaudeModelSound` | Change notification sound for a specific model | Optional |
 | `Test-ModelNotify` | Preview notification effect | Debugging |

@@ -1050,10 +1050,7 @@ Enter-ClaudeModel "$key"
         else {
             Write-Host " 输入 '$key' 即可启动" -ForegroundColor Cyan
         }
-        Write-Host "`n如需修改 API 配置，请编辑：" -ForegroundColor Gray
-        Write-Host "  $configDir\model-specific.json" -ForegroundColor DarkGray
-        Write-Host "`n如需修改显示名称/颜色/别名，请编辑：" -ForegroundColor Gray
-        Write-Host "  $script:RegistryPath" -ForegroundColor DarkGray
+        Write-Host "`n如需修改配置，运行 Set-ClaudeModel 即可交互式编辑" -ForegroundColor Gray
 
     }
     catch {
@@ -1360,6 +1357,238 @@ function Set-ClaudeModelSound {
     $test = Read-Host "`n是否立即试听？ [Y/n]"
     if (-not $test -or $test.Trim().ToLower() -in @('y','yes')) {
         Test-ModelNotify -ModelKey $ModelKey
+    }
+}
+
+# ---------- 公开函数：修改模型配置 ----------
+
+function Set-ClaudeModel {
+    <#
+    交互式向导：修改已注册模型的配置。
+    显示当前值作为默认值，按 Enter 保持不变。
+    支持修改显示名称、颜色、别名、API 配置、通知音效。
+    #>
+    [CmdletBinding()]
+    param()
+
+    if ($script:Registry.Count -eq 0) {
+        Write-Warning "当前没有已注册的模型"
+        return
+    }
+
+    Write-Host "`n========================================" -ForegroundColor Cyan
+    Write-Host "    修改 Claude Code 模型配置" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+
+    # --- 选择模型 ---
+    Write-Host "`n当前已注册的模型：" -ForegroundColor Yellow
+    $idx = 1
+    $keyMap = @{}
+    foreach ($key in $script:Registry.Keys | Sort-Object) {
+        $meta = $script:Registry[$key]
+        $aliasInfo = if ($meta.alias) { " [别名: $($meta.alias)]" } else { "" }
+        Write-Host "  $idx. $($meta.name)$aliasInfo" -ForegroundColor (Get-SafeConsoleColor -Color $meta.color)
+        $keyMap["$idx"] = $key
+        $idx++
+    }
+
+    $choice = Read-Host "`n要修改的模型编号"
+    if (-not $keyMap.ContainsKey($choice)) {
+        Write-Error "无效的选择"
+        return
+    }
+
+    $modelKey = $keyMap[$choice]
+    $meta = $script:Registry[$modelKey]
+    $configDir = "$env:USERPROFILE\.claude-$modelKey"
+
+    # 读取当前 model-specific.json
+    $specificPath = Join-Path $configDir "model-specific.json"
+    $modelSpecific = $null
+    if (Test-Path -LiteralPath $specificPath) {
+        $modelSpecific = Get-Content -LiteralPath $specificPath -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
+    }
+
+    # --- 显示当前值 ---
+    Write-Host "`n当前配置（直接按 Enter 保持不变）：" -ForegroundColor Yellow
+
+    # [1/6] 显示名称
+    Write-Host "`n[1/6] 显示名称" -ForegroundColor Yellow
+    Write-Host "  当前值: $($meta.name)" -ForegroundColor DarkGray
+    $nameInput = Read-Host "新名称"
+    $newName = if ([string]::IsNullOrWhiteSpace($nameInput)) { $meta.name } else { $nameInput.Trim() }
+
+    # [2/6] 颜色
+    Write-Host "`n[2/6] 终端颜色" -ForegroundColor Yellow
+    $colorMap = @("Green","Yellow","White","Red","Cyan","Magenta","Blue")
+    $currentColorIdx = [array]::IndexOf($colorMap, $meta.color)
+    if ($currentColorIdx -ge 0) {
+        Write-Host "  当前值: $($currentColorIdx + 1). $($meta.color)" -ForegroundColor $meta.color
+    } else {
+        Write-Host "  当前值: $($meta.color)" -ForegroundColor DarkGray
+    }
+    for ($i = 0; $i -lt $colorMap.Count; $i++) {
+        Write-Host "  $($i + 1). $($colorMap[$i])" -ForegroundColor $colorMap[$i]
+    }
+    $colorChoice = Read-Host "颜色编号 [1-$($colorMap.Count)]（直接回车不变）"
+    if ([string]::IsNullOrWhiteSpace($colorChoice)) {
+        $newColor = $meta.color
+    } else {
+        $colorIdx = 0
+        if ([int]::TryParse($colorChoice, [ref]$colorIdx)) {
+            $colorIdx--
+            if ($colorIdx -ge 0 -and $colorIdx -lt $colorMap.Count) {
+                $newColor = $colorMap[$colorIdx]
+            } else {
+                Write-Warning "无效选择，保持原颜色"
+                $newColor = $meta.color
+            }
+        } else {
+            $newColor = $meta.color
+        }
+    }
+
+    # [3/6] 快捷别名
+    Write-Host "`n[3/6] 快捷别名" -ForegroundColor Yellow
+    $currentAlias = if ($meta.alias) { $meta.alias } else { "（无）" }
+    Write-Host "  当前值: $currentAlias" -ForegroundColor DarkGray
+    Write-Host "  输入新别名，或输入 '-' 清除别名" -ForegroundColor DarkGray
+    $aliasInput = Read-Host "新别名"
+    $newAlias = $null
+    if ([string]::IsNullOrWhiteSpace($aliasInput)) {
+        $newAlias = $meta.alias
+    } elseif ($aliasInput.Trim() -eq '-') {
+        $newAlias = $null
+    } else {
+        $newAlias = $aliasInput.Trim().ToLower() -replace '[^a-z0-9_]',''
+        if ($newAlias -and -not (Test-ClaudeModelKey -Key $newAlias)) {
+            Write-Warning "别名只能包含小写字母、数字和下划线，保持原别名"
+            $newAlias = $meta.alias
+        } elseif ($newAlias -and $newAlias -ne $meta.alias) {
+            $conflictInRegistry = $script:Registry.GetEnumerator() | Where-Object { $_.Key -ne $modelKey -and $_.Value.alias -eq $newAlias }
+            if ($conflictInRegistry) {
+                Write-Warning "别名 '$newAlias' 已被其他模型使用，保持原别名"
+                $newAlias = $meta.alias
+            } elseif (Get-Command -Name $newAlias -ErrorAction SilentlyContinue) {
+                Write-Warning "命令 '$newAlias' 已存在，保持原别名"
+                $newAlias = $meta.alias
+            }
+        }
+    }
+
+    # [4/6] API Base URL
+    $currentBaseUrl = if ($modelSpecific -and $modelSpecific.env) { $modelSpecific.env.ANTHROPIC_BASE_URL } else { "" }
+    Write-Host "`n[4/6] API Base URL" -ForegroundColor Yellow
+    Write-Host "  当前值: $currentBaseUrl" -ForegroundColor DarkGray
+    $baseUrlInput = Read-Host "新 API Base URL"
+    $newBaseUrl = if ([string]::IsNullOrWhiteSpace($baseUrlInput)) { $currentBaseUrl } else { $baseUrlInput.Trim() }
+
+    # [5/6] API Key
+    $currentApiKey = if ($modelSpecific -and $modelSpecific.env) { $modelSpecific.env.ANTHROPIC_AUTH_TOKEN } else { "" }
+    $maskedKey = if ($currentApiKey.Length -gt 8) {
+        "$($currentApiKey.Substring(0,4))...$($currentApiKey.Substring($currentApiKey.Length - 4))"
+    } elseif ($currentApiKey) {
+        "$($currentApiKey.Substring(0,2))***"
+    } else {
+        "（未设置）"
+    }
+    Write-Host "`n[5/6] API Key" -ForegroundColor Yellow
+    Write-Host "  当前值: $maskedKey" -ForegroundColor DarkGray
+    Write-Host "  输入新值替换，直接回车保持不变" -ForegroundColor DarkGray
+    $apiKeyInput = Read-Host "新 API Key"
+    $newApiKey = if ([string]::IsNullOrWhiteSpace($apiKeyInput)) { $currentApiKey } else { $apiKeyInput }
+
+    # [6/6] 模型名称
+    $currentModelId = if ($modelSpecific -and $modelSpecific.env) { $modelSpecific.env.ANTHROPIC_MODEL } else { "" }
+    Write-Host "`n[6/6] 模型名称" -ForegroundColor Yellow
+    Write-Host "  当前值: $currentModelId" -ForegroundColor DarkGray
+    $modelIdInput = Read-Host "新模型名称"
+    $newModelId = if ([string]::IsNullOrWhiteSpace($modelIdInput)) { $currentModelId } else { $modelIdInput.Trim() }
+
+    # --- 检测是否有变更 ---
+    $changed = @()
+    if ($newName -ne $meta.name) { $changed += "显示名称: $($meta.name) → $newName" }
+    if ($newColor -ne $meta.color) { $changed += "终端颜色: $($meta.color) → $newColor" }
+    $oldAlias = if ($meta.alias) { $meta.alias } else { "（无）" }
+    $displayNewAlias = if ($newAlias) { $newAlias } else { "（无）" }
+    if ($displayNewAlias -ne $oldAlias) { $changed += "快捷别名: $oldAlias → $displayNewAlias" }
+    if ($newBaseUrl -ne $currentBaseUrl) { $changed += "API Base URL" }
+    if ($newApiKey -ne $currentApiKey) { $changed += "API Key" }
+    if ($newModelId -ne $currentModelId) { $changed += "模型名称: $currentModelId → $newModelId" }
+
+    if ($changed.Count -eq 0) {
+        Write-Host "`n没有任何变更。" -ForegroundColor Yellow
+        return
+    }
+
+    # --- 确认 ---
+    Write-Host "`n========================================" -ForegroundColor Yellow
+    Write-Host "以下配置将被修改：" -ForegroundColor Yellow
+    Write-Host "----------------------------------------"
+    foreach ($c in $changed) {
+        Write-Host " $c" -ForegroundColor Cyan
+    }
+    Write-Host "========================================"
+
+    $confirm = Read-Host "`n确认修改？ [Y/n]"
+    if ($confirm -and $confirm.Trim().ToLower() -notin @('y','yes')) {
+        Write-Host "`n已取消修改。" -ForegroundColor Red
+        return
+    }
+
+    # --- 执行更新 ---
+    try {
+        # 1. 更新注册表
+        $script:Registry[$modelKey].name = $newName
+        $script:Registry[$modelKey].color = $newColor
+
+        # 处理别名变更
+        if ($newAlias -ne $meta.alias) {
+            # 移除旧别名
+            if ($meta.alias -and (Get-Alias -Name $meta.alias -ErrorAction SilentlyContinue)) {
+                Remove-Alias -Name $meta.alias -Force -Scope Global
+            }
+            # 创建新别名
+            $script:Registry[$modelKey].alias = $newAlias
+            if ($newAlias) {
+                Set-ClaudeModelAlias -AliasName $newAlias -ModelKey $modelKey
+            }
+        }
+
+        Write-JsonFileAtomic -Path $script:RegistryPath -InputObject $script:Registry
+
+        # 2. 更新 model-specific.json（仅修改有变更的 API 字段）
+        if ($newBaseUrl -ne $currentBaseUrl -or $newApiKey -ne $currentApiKey -or $newModelId -ne $currentModelId) {
+            if (Test-Path -LiteralPath $configDir) {
+                if (-not $modelSpecific) {
+                    $modelSpecific = [ordered]@{
+                        env = [ordered]@{}
+                        hooks = @{}
+                    }
+                }
+                if ($newBaseUrl -ne $currentBaseUrl) { $modelSpecific.env.ANTHROPIC_BASE_URL = $newBaseUrl }
+                if ($newApiKey -ne $currentApiKey) { $modelSpecific.env.ANTHROPIC_AUTH_TOKEN = $newApiKey }
+                if ($newModelId -ne $currentModelId) {
+                    $modelSpecific.env.ANTHROPIC_MODEL = $newModelId
+                    $modelSpecific.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = $newModelId
+                    $modelSpecific.env.ANTHROPIC_DEFAULT_OPUS_MODEL = $newModelId
+                    $modelSpecific.env.ANTHROPIC_DEFAULT_SONNET_MODEL = $newModelId
+                    $modelSpecific.env.ANTHROPIC_REASONING_MODEL = $newModelId
+                }
+                Write-JsonFileAtomic -Path $specificPath -InputObject $modelSpecific
+                Write-Host "✅ 已更新 model-specific.json" -ForegroundColor Green
+            } else {
+                Write-Warning "配置目录不存在: $configDir，跳过 API 配置更新"
+            }
+        }
+
+        Write-Host "`n========================================" -ForegroundColor Green
+        Write-Host " 模型 '$newName' 配置已更新" -ForegroundColor Green
+        Write-Host "========================================"
+
+    }
+    catch {
+        Write-Error "更新模型配置失败: $_"
     }
 }
 
@@ -2022,6 +2251,7 @@ if ($bannerLevel -eq "full") {
     Write-Host "命令: $(($script:Registry.GetEnumerator() | ForEach-Object { if ($_.Value.alias) { "$($_.Value.alias) ($($_.Key))" } else { $_.Key } }) -join ', ')" -ForegroundColor Gray
     Write-Host "添加新模型: 运行 Add-ClaudeModel" -ForegroundColor Cyan
     Write-Host "删除模型: 运行 Remove-ClaudeModel" -ForegroundColor Red
+    Write-Host "修改模型配置: 运行 Set-ClaudeModel" -ForegroundColor Cyan
     Write-Host "修复通知脚本: 运行 Repair-ClaudeNotify" -ForegroundColor Cyan
     Write-Host "修改模型音效: 运行 Set-ClaudeModelSound" -ForegroundColor Cyan
     Write-Host "试听通知效果: 运行 Test-ModelNotify" -ForegroundColor Cyan
