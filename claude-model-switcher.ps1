@@ -779,13 +779,63 @@ New-BurntToastNotification -Text "Claude Code (`$env:CLAUDE_CONFIG_DIR)", "Task 
     }
 }
 
-function Assert-ClaudeInstalled {
-    $claudePath = if ($env:CLAUDE_CLI_PATH) { $env:CLAUDE_CLI_PATH } else { "claude" }
-    $cmd = Get-Command $claudePath -ErrorAction SilentlyContinue
-    if (-not $cmd) {
-        throw "未找到 claude 命令。请确保 Claude Code CLI 已安装并添加到 PATH，或设置环境变量 `$env:CLAUDE_CLI_PATH = 'C:\完整路径\claude.cmd'"
+function Resolve-ClaudeCommandPath {
+    $candidates = @()
+    if ($env:CLAUDE_CLI_PATH) {
+        $candidates += $env:CLAUDE_CLI_PATH
     }
-    return $cmd
+    $userClaudePath = [Environment]::GetEnvironmentVariable('CLAUDE_CLI_PATH', 'User')
+    if ($userClaudePath) {
+        $candidates += $userClaudePath
+    }
+    $machineClaudePath = [Environment]::GetEnvironmentVariable('CLAUDE_CLI_PATH', 'Machine')
+    if ($machineClaudePath) {
+        $candidates += $machineClaudePath
+    }
+
+    $npmRoot = & npm root -g 2>$null | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_ -PathType Container)
+    } | Select-Object -First 1
+    if (-not [string]::IsNullOrWhiteSpace($npmRoot)) {
+        $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+        $platform = if ($IsWindows) {
+            "win32"
+        }
+        elseif ($IsMacOS) {
+            "darwin"
+        }
+        elseif ($IsLinux) {
+            "linux"
+        }
+        else {
+            ""
+        }
+
+        $binaryName = if ($IsWindows) { "claude.exe" } else { "claude" }
+        $candidates += Join-Path $npmRoot "@anthropic-ai/claude-code/bin/$binaryName"
+        if ($platform -and $arch -in @("x64", "arm64")) {
+            $platformPackage = "@anthropic-ai/claude-code-$platform-$arch/$binaryName"
+            $candidates += Join-Path $npmRoot "@anthropic-ai/claude-code/node_modules/$platformPackage"
+        }
+    }
+    $candidates += @("claude", "claude.cmd", "claude.ps1", "claude.exe")
+
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (-not $candidate) { continue }
+        $cmd = Get-Command $candidate -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($cmd) {
+            if ($cmd.Source) { return $cmd.Source }
+            if ($cmd.Path) { return $cmd.Path }
+            if ($cmd.Definition) { return $cmd.Definition }
+            return $cmd.Name
+        }
+    }
+
+    throw "未找到 claude 命令。请确保 Claude Code CLI 已安装并添加到 PATH，或设置环境变量 `$env:CLAUDE_CLI_PATH = 'C:\完整路径\claude.cmd'"
+}
+
+function Assert-ClaudeInstalled {
+    return Resolve-ClaudeCommandPath
 }
 
 # ---------- 动态生成模型启动函数 ----------
@@ -804,8 +854,7 @@ function Initialize-ModelFunctions {
 
         # 动态创建函数（使用 global: 作用域确保 dot-sourcing 后可见）
         $funcBody = [scriptblock]::Create(@"
-`$claudeCmd = if (`$env:CLAUDE_CLI_PATH) { `$env:CLAUDE_CLI_PATH } else { 'claude' }
-Assert-ClaudeInstalled
+`$claudeCmd = Assert-ClaudeInstalled
 Enter-ClaudeModel "$modelKey"
 & `$claudeCmd @args
 "@)
@@ -1024,8 +1073,7 @@ function Add-ClaudeModel {
 
         # 4. 动态注册到当前会话（global 作用域确保立即可用）
         $funcBody = [scriptblock]::Create(@"
-`$claudeCmd = if (`$env:CLAUDE_CLI_PATH) { `$env:CLAUDE_CLI_PATH } else { 'claude' }
-Assert-ClaudeInstalled
+`$claudeCmd = Assert-ClaudeInstalled
 Enter-ClaudeModel "$key"
 & `$claudeCmd @args
 "@)
